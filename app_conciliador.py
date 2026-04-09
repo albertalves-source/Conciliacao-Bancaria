@@ -193,7 +193,7 @@ if ex_file and pdf_files:
     if df_dom is not None:
         list_pdf = []
         for p in pdf_files:
-            info = extrair_detalhes_pdf(p, mapa_banc, ia_on)
+            info = extrair_detalhes_pdf(p, mapa_bancos, ia_on)
             if info: info['Arq'] = p.name; list_pdf.append(info)
         
         rows = []
@@ -213,7 +213,7 @@ if ex_file and pdf_files:
                     rows.append({
                         'Status': '✅ CONCILIADO', 
                         'Data': d_ex, 
-                        'Valor Total': v_ex,
+                        'Valor Total': v_dom if 'v_dom' in locals() else v_ex,
                         'Imposto': i_info['nome'],
                         'Favorecido': d['Fav'] if d['Fav'] else limpar_nome_contabil(linha.get('Cliente', '')),
                         'Débito': i_info['conta'], 
@@ -280,12 +280,14 @@ if ex_file and pdf_files:
 
         disp = df_f.copy()
         
-        # Formatação de Moedas e Strings vazias
+        # Formatação de Moedas antes de tratar nulos e vazios
         for col in ['Valor Total', 'Principal', 'Multa', 'Juros']:
             disp[col] = disp[col].apply(formatar_moeda)
         
-        # Substituir campos vazios por um traço para limpeza visual
-        disp = disp.replace("", "-").replace(None, "-")
+        # Substituição robusta de nulos e vazios por traço para limpeza visual
+        disp = disp.fillna("-")
+        for col in disp.columns:
+            disp[col] = disp[col].apply(lambda x: "-" if str(x).strip() == "" else x)
 
         st.dataframe(disp.style.apply(style_rows, axis=1), use_container_width=True)
 
