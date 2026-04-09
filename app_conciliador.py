@@ -48,7 +48,6 @@ def formatar_moeda(v):
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
-    # Remove símbolos e garante formato decimal
     v_str = str(v).replace('R$', '').replace('$', '').replace(' ', '').strip()
     if ',' in v_str and '.' in v_str: v_str = v_str.replace('.', '').replace(',', '.')
     elif ',' in v_str: v_str = v_str.replace(',', '.')
@@ -88,7 +87,6 @@ def extrair_dados_arquivo(file, mapa_bancos, usar_ia):
                     
                     linhas = texto_pagina.split('\n')
                     for linha in linhas:
-                        # Busca data e valor na mesma linha (padrão de extrato)
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
                         valor_match = re.findall(r'(\d[\d\.]*,\d{2})', linha)
                         
@@ -99,10 +97,10 @@ def extrair_dados_arquivo(file, mapa_bancos, usar_ia):
                                     transacoes.append({
                                         'Data': [data_match.group(1)],
                                         'Total': val,
-                                        'Cod': "", 'Fav': "EXTRATO BANCARIO", 'Banc': "", 'IA': False, 'Arq': file.name
+                                        'Cod': "", 'Fav': "EXTRATO BANCARIO", 'Banc': "", 'IA': False, 'Arq': file.name,
+                                        'Principal': val, 'Multa': 0.0, 'Juros': 0.0
                                     })
                 
-                # Se for um comprovante único (não achou linhas de extrato)
                 if not transacoes:
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
                     rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
@@ -113,17 +111,26 @@ def extrair_dados_arquivo(file, mapa_bancos, usar_ia):
                     datas = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto_completo)))
                     valores = re.findall(r'(\d[\d\.]*,\d{2})', texto_completo)
                     if datas and valores:
+                        val_final = limpar_valor(valores[-1])
+                        prin = val_final
+                        mul = 0.0
+                        jur = 0.0
+                        if len(valores) >= 4:
+                            prin = limpar_valor(valores[-4])
+                            mul = limpar_valor(valores[-3])
+                            jur = limpar_valor(valores[-2])
+
                         transacoes.append({
                             'Data': datas,
-                            'Total': limpar_valor(valores[-1]),
+                            'Total': val_final,
                             'Cod': rec.group(1) if rec else "",
                             'Banc': banco_detectado,
                             'Fav': "COMPROVANTE PDF",
-                            'IA': False, 'Arq': file.name
+                            'IA': False, 'Arq': file.name,
+                            'Principal': prin, 'Multa': mul, 'Juros': jur
                         })
         except: pass
 
-    # Se ainda estiver vazio e for imagem ou PDF difícil, usa IA
     if not transacoes and usar_ia:
         prompt = "Extraia as transações deste documento em JSON: [{'data': 'DD/MM/AAAA', 'valor_total': 0.0, 'favorecido': 'Nome'}]"
         mime = "application/pdf" if file.name.lower().endswith(".pdf") else "image/jpeg"
@@ -131,11 +138,13 @@ def extrair_dados_arquivo(file, mapa_bancos, usar_ia):
         ia_res = processar_ia_generativa(prompt, base64_data, mime)
         if isinstance(ia_res, list):
             for item in ia_res:
+                v = item.get('valor_total', 0.0)
                 transacoes.append({
                     'Data': [item.get('data', "")],
-                    'Total': item.get('valor_total', 0.0),
+                    'Total': v,
                     'Fav': item.get('favorecido', ""),
-                    'Cod': "", 'Banc': "", 'IA': True, 'Arq': file.name
+                    'Cod': "", 'Banc': "", 'IA': True, 'Arq': file.name,
+                    'Principal': v, 'Multa': 0.0, 'Juros': 0.0
                 })
                 
     return transacoes
@@ -145,7 +154,7 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Portal de Conciliação Contábil V9.0")
+st.title("🏦 Portal de Conciliação Contábil V9.1")
 st.markdown("Otimizado para leitura de **Extratos Bancários** e Relatórios Domínio.")
 
 with st.sidebar:
@@ -167,7 +176,6 @@ if excel_file and receipt_files:
     except Exception as e:
         st.error(f"Erro ao ler planilha: {e}"); st.stop()
 
-    # Processar todos os ficheiros PDF e extrair TODAS as transações
     todas_transacoes_pdf = []
     for f in receipt_files:
         with st.spinner(f"Processando {f.name}..."):
@@ -176,51 +184,62 @@ if excel_file and receipt_files:
 
     rows, ids_pdf_usados = [], set()
     
-    # Cruzamento Excel -> PDFs
     for idx, l in df_dom.iterrows():
         v_ex = limpar_valor(l[c_v])
         d_ex = converter_data_dominio(l[c_d])
         
-        if v_ex == 0 or d_ex is None: continue # Ignora linhas inválidas
+        if v_ex == 0 or d_ex is None: continue 
         
         match = False
         for i, doc in enumerate(todas_transacoes_pdf):
-            # Match por Valor e Data
             if abs(v_ex - doc['Total']) < 0.05 and d_ex in doc['Data']:
                 i_inf = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': doc['Fav']})
                 b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper() or k in doc['Arq'].upper()), {'nome': 'BANCO', 'reduzido': '99'})
                 
                 rows.append({
                     'Status': '✅ CONCILIADO', 'Data': d_ex, 'Valor Total': v_ex,
-                    'Imposto/Fav': i_inf['nome'], 'Débito': i_inf['conta'], 'Crédito': b_inf['reduzido'], 'Arquivo': doc['Arq']
+                    'Imposto/Fav': i_inf['nome'], 'Débito': i_inf['conta'], 'Crédito': b_inf['reduzido'], 
+                    'Principal': doc.get('Principal', v_ex), 'Multa': doc.get('Multa', 0.0), 'Juros': doc.get('Juros', 0.0),
+                    'Arquivo': doc['Arq']
                 })
                 ids_pdf_usados.add(i)
                 match = True
                 break
         
         if not match:
-            rows.append({'Status': '❌ FALTA PDF', 'Data': d_ex, 'Valor Total': v_ex, 'Imposto/Fav': l.get('Fornecedor', '-')})
+            rows.append({'Status': '❌ FALTA PDF', 'Data': d_ex, 'Valor Total': v_ex, 'Imposto/Fav': l.get('Fornecedor', '-'), 'Principal': v_ex, 'Multa': 0.0, 'Juros': 0.0})
 
-    # Adicionar transações que estão no PDF mas não no Excel
     for i, doc in enumerate(todas_transacoes_pdf):
         if i not in ids_pdf_usados:
             rows.append({
                 'Status': '⚠️ SÓ NO PDF', 'Data': doc['Data'][0] if doc['Data'] else "-", 'Valor Total': doc['Total'],
-                'Imposto/Fav': doc['Fav'], 'Arquivo': doc['Arq']
+                'Imposto/Fav': doc['Fav'], 'Principal': doc.get('Principal', doc['Total']), 
+                'Multa': doc.get('Multa', 0.0), 'Juros': doc.get('Juros', 0.0), 'Arquivo': doc['Arq']
             })
 
     res_df = pd.DataFrame(rows)
     
-    # Formatação Visual
-    def color_status(val):
+    def apply_color(val):
         if val == '✅ CONCILIADO': return 'background-color: rgba(46, 204, 113, 0.1)'
         if val == '❌ FALTA PDF': return 'background-color: rgba(231, 76, 60, 0.1)'
         return 'background-color: rgba(241, 196, 15, 0.1)'
 
     st.subheader("📋 Relatório de Conciliação")
     disp = res_df.copy()
-    disp['Valor Total'] = disp['Valor Total'].apply(formatar_moeda)
-    st.dataframe(disp.style.applymap(color_status, subset=['Status']), use_container_width=True)
+    
+    # Formatação de moedas
+    for col in ['Valor Total', 'Principal', 'Multa', 'Juros']:
+        if col in disp.columns:
+            disp[col] = disp[col].apply(formatar_moeda)
+
+    # CORREÇÃO: Usar .map() em vez de .applymap() para compatibilidade com Pandas recentes
+    if hasattr(disp.style, 'map'):
+        styled_df = disp.style.map(apply_color, subset=['Status'])
+    else:
+        # Fallback para versões mais antigas do Pandas
+        styled_df = disp.style.applymap(apply_color, subset=['Status'])
+
+    st.dataframe(styled_df, use_container_width=True)
     
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
