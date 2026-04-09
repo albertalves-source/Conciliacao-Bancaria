@@ -69,31 +69,36 @@ def converter_data_dominio(data_obj):
         return None
 
 def limpar_nome_contabil(nome):
-    """Limpeza agressiva de IDs e termos técnicos de extratos."""
+    """Limpeza cirúrgica para remover IDs técnicos e manter nomes de empresas."""
     if not nome or str(nome).lower() in ["n/a", "nan", "0", "none"]: return ""
     
     n = str(nome).upper()
     
-    # 1. Remove UUIDs e hashes (IDs longos com hífens ou alfanuméricos)
+    # 1. Remove UUIDs (IDs com hífens)
     n = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', n)
-    # Remove blocos de 4 caracteres que pareçam parte de ID (ex: 2A04)
-    n = re.sub(r'\b[A-Z0-9]{4}\b', '', n)
     
-    # 2. Remove sequências numéricas/IDs bancários
+    # 2. Remove blocos alfanuméricos de IDs (letras e números misturados com 4+ caracteres)
+    # Protege palavras puras como "INTERNATIONAL" ou "BRASIL"
+    n = re.sub(r'\b(?=[A-Z]*[0-9])(?=[0-9]*[A-Z])[A-Z0-9]{4,}\b', '', n)
+    
+    # 3. Remove números longos (IDs de sistema)
     n = re.sub(r'\d{8,}', '', n)
     
-    # 3. Termos bancários irrelevantes
+    # 4. Remove lixo bancário específico detectado nos seus testes
     termos_lixo = [
         "PIX ENVIADO PARA", "PIX RECEBIDO", "TRANSFERÊNCIA ENVIADA PARA", "TRANSFERÊNCIA RECEBIDA",
         "PAGADOR", "BENEFICIARIO", "RAZAO SOCIAL", "FAVORECIDO", "VALOR PAGO", "DATA DO", "PAGAMENTO",
         "BOLETO", "PAYMENT", "SALDO DISPONÍVEL", "CONNECTPSP", "DESENVOLVEDORA", "R\$", "DE R\$", 
-        "INSTITUICAO", "AUTENTICACAO", "COMPROVANTE", "OPERATIONS", "LTDA", "S.A.", "SA"
+        "INSTITUICAO", "AUTENTICACAO", "COMPROVANTE", "OPERATIONS", "LTDA", "S.A.", "S/A", "SA"
     ]
     for t in termos_lixo:
         n = re.sub(r'\b' + t + r'\b', '', n)
     
+    # 5. Remove caracteres residuais e palavras muito curtas sem sentido
     n = re.sub(r'[:\-,\(\)_]', ' ', n)
-    return ' '.join(n.split()).strip()
+    n = ' '.join([word for word in n.split() if len(word) > 1 or word.isdigit()])
+    
+    return n.strip()
 
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
     transacoes = []
@@ -119,7 +124,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                                 for b_key in mapa_bancos.keys():
                                     if b_key in texto_pagina.upper(): banco_det = b_key; break
                             
-                            # Cód. Receita: Só aceita se estiver no mapa de impostos
+                            # Cód. Receita: Só aceita se estiver no seu Plano de Contas
                             cod_found = ""
                             possible_codes = re.findall(r'\b(\d{4})\b', linha)
                             for c in possible_codes:
@@ -174,7 +179,7 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V13.0")
+st.title("🏦 Conciliador Contábil IA V14.0")
 st.markdown("Otimizado para exportações Domínio e Extratos Bancários complexos.")
 
 with st.sidebar:
@@ -221,7 +226,7 @@ if excel_file and receipt_files:
                         i_inf = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
                         b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper() or k in doc['Arq'].upper()), {'nome': 'BANCO', 'reduzido': '99'})
                         
-                        # MASTER FIX: Se conciliou, o nome do favorecido DEVE ser o do Excel (que é o oficial)
+                        # MASTER FIX: Se conciliou, o nome do favorecido deve vir do EXCEL (que é o que o Antônio digitou)
                         fav_final = str(l.get(c_cli, '')).upper()
                         if not fav_final or fav_final == "NAN": fav_final = doc['Fav']
 
@@ -249,7 +254,8 @@ if excel_file and receipt_files:
 
     for i, doc in enumerate(todas_transacoes_pdf):
         if i not in ids_pdf_usados:
-            rows.append({'Status': '⚠️ SÓ NO PDF', 'Data PDF': doc['Data'][0], 'Valor Total': doc['Total'], 'Imposto': mapa_imp.get(doc['Cod'], {'nome':'-'})['nome'], 'Favorecido': doc['Fav'], 'Banco': doc.get('Banc', '-'), 'Arquivo': doc['Arq']})
+            b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper() or k in doc['Arq'].upper()), {'nome': 'BANCO', 'reduzido': '99'})
+            rows.append({'Status': '⚠️ SÓ NO PDF', 'Data PDF': doc['Data'][0], 'Valor Total': doc['Total'], 'Imposto': mapa_imp.get(doc['Cod'], {'nome':'-'})['nome'], 'Favorecido': doc['Fav'], 'Banco': b_inf['nome'], 'Arquivo': doc['Arq']})
 
     st.subheader("📋 Relatório de Conciliação")
     res_df = pd.DataFrame(rows).fillna("-")
@@ -268,4 +274,4 @@ if excel_file and receipt_files:
     
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
-    st.download_button("📥 Baixar Planilha de Lançamentos", out.getvalue(), "conciliacao_v13.xlsx")
+    st.download_button("📥 Baixar Planilha de Lançamentos", out.getvalue(), "conciliacao_final.xlsx")
