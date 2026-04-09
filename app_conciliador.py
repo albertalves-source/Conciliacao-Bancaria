@@ -6,6 +6,8 @@ import warnings
 import requests
 import json
 import time
+import base64
+from datetime import datetime
 
 # Tenta importar bibliotecas extras de forma segura
 try:
@@ -14,78 +16,57 @@ except ImportError:
     st.error("Erro: A biblioteca 'pdfplumber' não foi encontrada. Verifique o seu requirements.txt.")
 
 # Configurações de Página
-st.set_page_config(page_title="Portal de Conciliação Contábil IA", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Portal de Conciliação IA - Extratos", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
 # --- CONFIGURAÇÃO DA IA (GEMINI) ---
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 
-def consultar_ia(texto_pdf):
+def processar_ia_generativa(prompt, image_data=None, mime_type=None):
     if not api_key: return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
-    
-    prompt = f"""
-    Você é um assistente contábil. Analise o texto do comprovante e extraia JSON:
-    {{
-      "imposto_nome": "Nome do Imposto",
-      "codigo_receita": "4 dígitos",
-      "banco_nome": "Nome do Banco"
-    }}
-    Texto: {texto_pdf[:1500]}
-    """
-    
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-    
+    parts = [{"text": prompt}]
+    if image_data:
+        parts.append({"inlineData": {"mimeType": mime_type, "data": image_data}})
+    payload = {"contents": [{"parts": parts}], "generationConfig": {"responseMimeType": "application/json"}}
     try:
-        response = requests.post(url, json=payload, timeout=15)
+        response = requests.post(url, json=payload, timeout=30)
         if response.status_code == 200:
             res_json = response.json()
             content = res_json['candidates'][0]['content']['parts'][0]['text']
             return json.loads(content)
-    except:
-        return None
+    except: return None
     return None
-
-# --- ESTILIZAÇÃO E PERFUMARIA ---
-st.markdown("""
-    <style>
-    [data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; }
-    div[data-testid="metric-container"] {
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        padding: 20px;
-        border-radius: 15px;
-        background-color: rgba(128, 128, 128, 0.03);
-    }
-    .stDataFrame { border-radius: 12px; }
-    </style>
-    """, unsafe_allow_html=True)
 
 # --- FUNÇÕES DE APOIO ---
 def formatar_moeda(v):
-    """Formata valor para padrão R$ 1.234,56."""
     try:
         val = float(v)
         if val == 0: return "-"
         return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except:
-        return "-"
+    except: return "-"
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
+    # Remove símbolos e garante formato decimal
     v_str = str(v).replace('R$', '').replace('$', '').replace(' ', '').strip()
     if ',' in v_str and '.' in v_str: v_str = v_str.replace('.', '').replace(',', '.')
     elif ',' in v_str: v_str = v_str.replace(',', '.')
     try: return float(v_str)
     except: return 0.0
 
-def padronizar_data(data_obj):
-    try: return pd.to_datetime(data_obj, dayfirst=True).strftime('%d/%m/%Y')
+def converter_data_dominio(data_obj):
+    if pd.isna(data_obj): return None
+    try:
+        num = float(data_obj)
+        if num > 10000: # Excel Serial Date
+            return pd.to_datetime(num, unit='D', origin='1899-12-30').strftime('%d/%m/%Y')
+    except: pass
+    try: 
+        return pd.to_datetime(data_obj, dayfirst=True).strftime('%d/%m/%Y')
     except:
         match = re.search(r'(\d{2}/\d{2}/\d{4})', str(data_obj))
-        return match.group(1) if match else str(data_obj)
+        return match.group(1) if match else None
 
 def limpar_nome_contabil(nome):
     if not nome or str(nome).lower() in ["n/a", "nan", "0", "none"]: return ""
@@ -94,208 +75,153 @@ def limpar_nome_contabil(nome):
     for t in termos: nome = re.sub(t, '', nome, flags=re.IGNORECASE)
     return nome.replace(':', '').strip().upper()
 
-def extrair_detalhes_pdf(file_pdf, mapa_bancos, usar_ia):
-    det = {'Data': [], 'Total': 0.0, 'Principal': 0.0, 'Multa': 0.0, 'Juros': 0.0, 
-           'Cod': "", 'Fav': "", 'Banc': "", 'IA': False, 'IA_Imp': ""}
-    try:
-        with pdfplumber.open(file_pdf) as pdf:
-            texto = pdf.pages[0].extract_text()
-            if not texto: return None
-            texto_upper = texto.upper()
-            det['Data'] = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto)))
-            
-            rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto, re.IGNORECASE)
-            if rec: det['Cod'] = rec.group(1)
-            
-            for termo, info in mapa_bancos.items():
-                if termo in texto_upper:
-                    det['Banc'] = termo
-                    break
-            
-            vals = re.findall(r'(\d[\d\.]*,\d{2})', texto)
-            if vals:
-                det['Total'] = limpar_valor(vals[-1])
-                if len(vals) >= 4:
-                    det['Principal'] = limpar_valor(vals[-4])
-                    det['Multa'] = limpar_valor(vals[-3])
-                    det['Juros'] = limpar_valor(vals[-2])
-                else: det['Principal'] = det['Total']
-            
-            if usar_ia and api_key and (not det['Cod'] or not det['Banc']):
-                ia_res = consultar_ia(texto)
-                if ia_res:
-                    det['Cod'] = ia_res.get('codigo_receita', det['Cod'])
-                    det['IA_Imp'] = ia_res.get('imposto_nome', "")
-                    det['IA'] = True
+def extrair_dados_arquivo(file, mapa_bancos, usar_ia):
+    """Extrai uma LISTA de transações de um PDF (suporta Extratos e Comprovantes)."""
+    transacoes = []
+    
+    if file.name.lower().endswith(".pdf"):
+        try:
+            with pdfplumber.open(file) as pdf:
+                for page in pdf.pages:
+                    texto_pagina = page.extract_text()
+                    if not texto_pagina: continue
+                    
+                    linhas = texto_pagina.split('\n')
+                    for linha in linhas:
+                        # Busca data e valor na mesma linha (padrão de extrato)
+                        data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
+                        valor_match = re.findall(r'(\d[\d\.]*,\d{2})', linha)
+                        
+                        if data_match and valor_match:
+                            for v_txt in valor_match:
+                                val = limpar_valor(v_txt)
+                                if val > 0:
+                                    transacoes.append({
+                                        'Data': [data_match.group(1)],
+                                        'Total': val,
+                                        'Cod': "", 'Fav': "EXTRATO BANCARIO", 'Banc': "", 'IA': False, 'Arq': file.name
+                                    })
+                
+                # Se for um comprovante único (não achou linhas de extrato)
+                if not transacoes:
+                    texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
+                    rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
+                    banco_detectado = ""
+                    for termo in mapa_bancos.keys():
+                        if termo in texto_completo.upper(): banco_detectado = termo; break
+                    
+                    datas = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto_completo)))
+                    valores = re.findall(r'(\d[\d\.]*,\d{2})', texto_completo)
+                    if datas and valores:
+                        transacoes.append({
+                            'Data': datas,
+                            'Total': limpar_valor(valores[-1]),
+                            'Cod': rec.group(1) if rec else "",
+                            'Banc': banco_detectado,
+                            'Fav': "COMPROVANTE PDF",
+                            'IA': False, 'Arq': file.name
+                        })
+        except: pass
 
-            for linha in texto.split('\n'):
-                if any(x in linha.upper() for x in ["BENEFICIARIO", "RAZAO SOCIAL", "NOME", "FAVORECIDO"]):
-                    det['Fav'] = limpar_nome_contabil(linha.split(':')[-1] if ':' in linha else linha)
-                    break
-    except: pass
-    return det
+    # Se ainda estiver vazio e for imagem ou PDF difícil, usa IA
+    if not transacoes and usar_ia:
+        prompt = "Extraia as transações deste documento em JSON: [{'data': 'DD/MM/AAAA', 'valor_total': 0.0, 'favorecido': 'Nome'}]"
+        mime = "application/pdf" if file.name.lower().endswith(".pdf") else "image/jpeg"
+        base64_data = base64.b64encode(file.getvalue()).decode("utf-8")
+        ia_res = processar_ia_generativa(prompt, base64_data, mime)
+        if isinstance(ia_res, list):
+            for item in ia_res:
+                transacoes.append({
+                    'Data': [item.get('data', "")],
+                    'Total': item.get('valor_total', 0.0),
+                    'Fav': item.get('favorecido', ""),
+                    'Cod': "", 'Banc': "", 'IA': True, 'Arq': file.name
+                })
+                
+    return transacoes
 
 # --- BIBLIOTECA PADRÃO ---
-DEFAULTS_IMPOSTOS = {
-    '0561': {'n': 'IRRF s/ Salários', 'c': '2105'},
-    '2172': {'n': 'COFINS Faturamento', 'c': '2108'},
-    '8109': {'n': 'PIS Faturamento', 'c': '2110'},
-    '5952': {'n': 'CSRF Retenções', 'c': '2115'},
-}
+DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'n': 'COFINS Faturamento', 'c': '2108'}, '8109': {'n': 'PIS Faturamento', 'c': '2110'}}
+DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}}
 
-DEFAULTS_BANCOS = {
-    'ITAU': {'n': 'Itaú', 'r': '10'},
-    'BRAD': {'n': 'Bradesco', 'r': '20'},
-    'SANTANDER': {'n': 'Santander', 'r': '30'},
-    'BRASIL': {'n': 'B. Brasil', 'r': '01'},
-    'CAIXA': {'n': 'Caixa', 'r': '05'},
-}
-
-# --- INTERFACE PRINCIPAL ---
-st.title("🏦 Portal de Conciliação Contábil IA")
-st.markdown("Sistema automatizado para conferência de impostos e comprovantes bancários.")
+# --- INTERFACE ---
+st.title("🏦 Portal de Conciliação Contábil V9.0")
+st.markdown("Otimizado para leitura de **Extratos Bancários** e Relatórios Domínio.")
 
 with st.sidebar:
-    st.header("🤖 Inteligência Artificial")
-    ia_on = st.toggle("Ativar IA (Gemini)", value=True)
-    if not api_key: st.warning("⚠️ Chave API não configurada nos Secrets.")
+    st.header("⚙️ Configurações")
+    ia_on = st.toggle("Ativar IA (Para PDFs complexos)", value=True)
+    mapa_imp = {cod: {'conta': st.text_input(f"{info['n']}", info['c']), 'nome': info['n']} for cod, info in DEFAULTS_IMPOSTOS.items()}
+    mapa_bancos = {k: {'reduzido': st.text_input(f"Cod. {v['n']}", v['r']), 'nome': v['n']} for k, v in DEFAULTS_BANCOS.items()}
+
+c1, c2 = st.columns(2)
+with c1: excel_file = st.file_uploader("📂 Relatório Domínio (Excel/CSV)", type=["xlsx", "xls", "csv"])
+with c2: receipt_files = st.file_uploader("📄 Extratos/Comprovantes (PDF/Imagens)", type=["pdf", "png", "jpg"], accept_multiple_files=True)
+
+if excel_file and receipt_files:
+    try:
+        df_dom = pd.read_excel(excel_file) if not excel_file.name.endswith('.csv') else pd.read_csv(excel_file, sep=None, engine='python')
+        df_dom.columns = [str(c).replace('\n', ' ').strip() for c in df_dom.columns]
+        c_d = next((c for c in df_dom.columns if "data" in c.lower()), None)
+        c_v = next((c for c in df_dom.columns if "valor" in c.lower() and "cont" in c.lower()), next((c for c in df_dom.columns if "valor" in c.lower() or "vlr" in c.lower()), None))
+    except Exception as e:
+        st.error(f"Erro ao ler planilha: {e}"); st.stop()
+
+    # Processar todos os ficheiros PDF e extrair TODAS as transações
+    todas_transacoes_pdf = []
+    for f in receipt_files:
+        with st.spinner(f"Processando {f.name}..."):
+            itens = extrair_dados_arquivo(f, mapa_bancos, ia_on)
+            todas_transacoes_pdf.extend(itens)
+
+    rows, ids_pdf_usados = [], set()
     
-    st.header("⚙️ Plano de Contas")
-    mapa_imp = {}
-    with st.expander("Contas de Impostos"):
-        for cod, info in DEFAULTS_IMPOSTOS.items():
-            c = st.text_input(f"{info['n']} ({cod})", info['c'], key=f"i_{cod}")
-            mapa_imp[cod] = {'conta': c, 'nome': info['n']}
+    # Cruzamento Excel -> PDFs
+    for idx, l in df_dom.iterrows():
+        v_ex = limpar_valor(l[c_v])
+        d_ex = converter_data_dominio(l[c_d])
+        
+        if v_ex == 0 or d_ex is None: continue # Ignora linhas inválidas
+        
+        match = False
+        for i, doc in enumerate(todas_transacoes_pdf):
+            # Match por Valor e Data
+            if abs(v_ex - doc['Total']) < 0.05 and d_ex in doc['Data']:
+                i_inf = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': doc['Fav']})
+                b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper() or k in doc['Arq'].upper()), {'nome': 'BANCO', 'reduzido': '99'})
+                
+                rows.append({
+                    'Status': '✅ CONCILIADO', 'Data': d_ex, 'Valor Total': v_ex,
+                    'Imposto/Fav': i_inf['nome'], 'Débito': i_inf['conta'], 'Crédito': b_inf['reduzido'], 'Arquivo': doc['Arq']
+                })
+                ids_pdf_usados.add(i)
+                match = True
+                break
+        
+        if not match:
+            rows.append({'Status': '❌ FALTA PDF', 'Data': d_ex, 'Valor Total': v_ex, 'Imposto/Fav': l.get('Fornecedor', '-')})
+
+    # Adicionar transações que estão no PDF mas não no Excel
+    for i, doc in enumerate(todas_transacoes_pdf):
+        if i not in ids_pdf_usados:
+            rows.append({
+                'Status': '⚠️ SÓ NO PDF', 'Data': doc['Data'][0] if doc['Data'] else "-", 'Valor Total': doc['Total'],
+                'Imposto/Fav': doc['Fav'], 'Arquivo': doc['Arq']
+            })
+
+    res_df = pd.DataFrame(rows)
     
-    mapa_bancos = {}
-    with st.expander("Contas de Bancos"):
-        for k, v in DEFAULTS_BANCOS.items():
-            r = st.text_input(f"Cod. {v['n']}", v['r'], key=f"b_{k}")
-            mapa_bancos[k] = {'reduzido': r, 'nome': v['n']}
+    # Formatação Visual
+    def color_status(val):
+        if val == '✅ CONCILIADO': return 'background-color: rgba(46, 204, 113, 0.1)'
+        if val == '❌ FALTA PDF': return 'background-color: rgba(231, 76, 60, 0.1)'
+        return 'background-color: rgba(241, 196, 15, 0.1)'
 
-# ÁREA DE UPLOAD
-u1, u2 = st.columns(2)
-ex_file = u1.file_uploader("📂 Relatório Domínio (Excel)", type=["xlsx", "xls"])
-pdf_files = u2.file_uploader("📄 Comprovantes (PDFs)", type=["pdf"], accept_multiple_files=True)
-
-if ex_file and pdf_files:
-    df_dom = None
-    for p in range(15):
-        try:
-            tmp = pd.read_excel(ex_file, skiprows=p)
-            cols = [str(c).lower().strip() for c in tmp.columns]
-            if any("data" in c or "dt" in c for c in cols) and any("valor" in c or "vlr" in c for c in cols):
-                c_d = next(c for c in tmp.columns if "data" in str(c).lower() or "dt" in str(c).lower())
-                c_v = next(c for c in tmp.columns if "valor" in str(c).lower() or "vlr" in str(c).lower())
-                df_dom = tmp; break
-        except: continue
-
-    if df_dom is not None:
-        list_pdf = []
-        for p in pdf_files:
-            info = extrair_detalhes_pdf(p, mapa_bancos, ia_on)
-            if info: info['Arq'] = p.name; list_pdf.append(info)
-        
-        rows = []
-        pdf_usados = set()
-        
-        for _, linha in df_dom.iterrows():
-            v_ex = limpar_valor(linha[c_v])
-            if v_ex == 0: continue
-            d_ex = padronizar_data(linha[c_d])
-            match = False
-            
-            for d in list_pdf:
-                if abs(v_ex - d['Total']) < 0.01 and d_ex in d['Data']:
-                    i_info = mapa_imp.get(d['Cod'], {'conta': '9999', 'nome': d.get('IA_Imp', 'FORNECEDOR/OUTROS')})
-                    b_info = mapa_bancos.get(d['Banc'], {'nome': 'BANCO', 'reduzido': '99'})
-                    
-                    rows.append({
-                        'Status': '✅ CONCILIADO', 
-                        'Data': d_ex, 
-                        'Valor Total': v_ex,
-                        'Imposto': i_info['nome'],
-                        'Favorecido': d['Fav'] if d['Fav'] else limpar_nome_contabil(linha.get('Cliente', '')),
-                        'Débito': i_info['conta'], 
-                        'Crédito': b_info['reduzido'], 
-                        'Histórico': f"PAGTO {i_info['nome']} VIA {b_info['nome']} REF {d_ex}",
-                        'Principal': d['Principal'], 'Multa': d['Multa'], 'Juros': d['Juros'],
-                        'IA': '✨' if d['IA'] else '', 'Arquivo': d['Arq']
-                    })
-                    pdf_usados.add(d['Arq']); match = True; break
-            
-            if not match:
-                rows.append({
-                    'Status': '❌ FALTA PDF', 
-                    'Data': d_ex, 
-                    'Valor Total': v_ex,
-                    'Imposto': '-',
-                    'Favorecido': limpar_nome_contabil(linha.get('Cliente', '')),
-                    'Débito': '9999', 'Crédito': '99', 
-                    'Histórico': 'NÃO LOCALIZADO',
-                    'Principal': 0.0, 'Multa': 0.0, 'Juros': 0.0, 
-                    'IA': '', 'Arquivo': ''
-                })
-
-        for d in list_pdf:
-            if d['Arq'] not in pdf_usados:
-                i_info = mapa_imp.get(d['Cod'], {'conta': '9999', 'nome': d.get('IA_Imp', 'NÃO IDENTIFICADO')})
-                rows.append({
-                    'Status': '⚠️ SÓ NO PDF', 
-                    'Data': d['Data'][0] if d['Data'] else "-", 
-                    'Valor Total': d['Total'],
-                    'Imposto': i_info['nome'],
-                    'Favorecido': d['Fav'],
-                    'Débito': i_info['conta'], 'Crédito': '99', 
-                    'Histórico': 'PDF SEM LANÇAMENTO NO EXCEL', 
-                    'Principal': d['Principal'], 'Multa': d['Multa'], 'Juros': d['Juros'],
-                    'IA': '✨' if d['IA'] else '', 'Arquivo': d['Arq']
-                })
-
-        res_df = pd.DataFrame(rows)
-        
-        # Dashboard
-        k1, k2, k3, k4 = st.columns(4)
-        conc = len(res_df[res_df['Status'] == '✅ CONCILIADO'])
-        falta = len(res_df[res_df['Status'] == '❌ FALTA PDF'])
-        sobra = len(res_df[res_df['Status'] == '⚠️ SÓ NO PDF'])
-        
-        k1.metric("Conciliados", conc)
-        k2.metric("Pendentes (Excel)", falta, delta_color="inverse")
-        k3.metric("Pendentes (PDF)", sobra)
-        k4.metric("Total Processado", formatar_moeda(res_df['Valor Total'].sum()))
-
-        st.divider()
-        c_h1, c_h2 = st.columns([2, 1])
-        with c_h1: st.subheader("📋 Detalhamento da Conciliação")
-        with c_h2: filtro = st.multiselect("Filtrar por Status:", res_df['Status'].unique(), default=res_df['Status'].unique())
-        
-        df_f = res_df[res_df['Status'].isin(filtro)]
-
-        # Estilização
-        def style_rows(row):
-            if row['Status'] == '✅ CONCILIADO': return ['background-color: rgba(46, 204, 113, 0.08)'] * len(row)
-            if row['Status'] == '❌ FALTA PDF': return ['background-color: rgba(231, 76, 60, 0.08)'] * len(row)
-            return ['background-color: rgba(241, 196, 15, 0.08)'] * len(row)
-
-        disp = df_f.copy()
-        
-        # Formatação de Moedas antes de tratar nulos e vazios
-        for col in ['Valor Total', 'Principal', 'Multa', 'Juros']:
-            disp[col] = disp[col].apply(formatar_moeda)
-        
-        # Substituição robusta de nulos e vazios por traço para limpeza visual
-        disp = disp.fillna("-")
-        for col in disp.columns:
-            disp[col] = disp[col].apply(lambda x: "-" if str(x).strip() == "" else x)
-
-        st.dataframe(disp.style.apply(style_rows, axis=1), use_container_width=True)
-
-        # Exportação
-        out = io.BytesIO()
-        with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
-        st.download_button("📥 Baixar Excel Completo", out.getvalue(), "conciliacao_contabil_final.xlsx")
-    else:
-        st.error("❌ Erro ao ler Excel. Verifique o cabeçalho.")
-else:
-    st.info("💡 Arraste o Excel do Domínio e os PDFs dos comprovantes para começar.")
+    st.subheader("📋 Relatório de Conciliação")
+    disp = res_df.copy()
+    disp['Valor Total'] = disp['Valor Total'].apply(formatar_moeda)
+    st.dataframe(disp.style.applymap(color_status, subset=['Status']), use_container_width=True)
+    
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
+    st.download_button("📥 Baixar Relatório", out.getvalue(), "conciliacao_extrato.xlsx")
