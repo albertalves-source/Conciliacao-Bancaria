@@ -58,7 +58,7 @@ def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
     try:
         num = float(data_obj)
-        if num > 10000: # Excel Serial Date
+        if num > 10000: # Data Serial do Excel
             return pd.to_datetime(num, unit='D', origin='1899-12-30').date()
     except: pass
     try: 
@@ -102,7 +102,6 @@ def limpar_nome_contabil(nome):
     palavras = [w for w in n.split() if len(w) > 1]
     resultado = ' '.join(palavras).strip()
     
-    # Se só sobrou lixo de conexão, retorna vazio
     if not resultado or resultado in ["DE", "DA", "DO", "PARA", "EM"]: return ""
     return resultado
 
@@ -127,14 +126,14 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                         
                         linha_upper = linha.upper()
                         
-                        # Filtro Anti-Lixo Mestre: Pula linhas claras de Saldo
+                        # Filtro Anti-Lixo Mestre
                         if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
                         # FILTRO DE NATUREZA: Diferencia Entradas (Verde) de Saídas (Vermelho)
                         is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO"])
                         
-                        if "Pagar" in modo_conciliacao and is_credito: continue # Ignora números verdes (entradas)
-                        if "Receber" in modo_conciliacao and not is_credito: continue # Ignora números vermelhos (saídas)
+                        if "Pagar" in modo_conciliacao and is_credito: continue 
+                        if "Receber" in modo_conciliacao and not is_credito: continue 
                         
                         # Filtro Personalizado do Utilizador
                         if any(t in linha_upper for t in termos_ignorar if t): continue
@@ -146,11 +145,9 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                             desc_bruta = linha.replace(data_match.group(1), "")
                             for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
                             
-                            # A mágica que remove nomes vazios fantasmas
                             nome_limpo = limpar_nome_contabil(desc_bruta)
                             if not nome_limpo: continue
 
-                            # Cód. Receita: Apenas códigos validados do plano
                             cod_found = ""
                             codes = re.findall(r'\b(\d{4})\b', linha)
                             for c in codes:
@@ -165,7 +162,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                                         'Banc': banco_base, 'IA': False, 'Arq': file.name,
                                         'Principal': val, 'Multa': 0.0, 'Juros': 0.0
                                     })
-                # Fallback para comprovantes simples (Ex: DARF)
+                
                 if not transacoes:
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
                     texto_upper = texto_completo.upper()
@@ -188,15 +185,71 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
         
     return transacoes
 
-# --- BIBLIOTECA PADRÃO ---
-DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'n': 'COFINS Faturamento', 'c': '2108'}, '8109': {'n': 'PIS Faturamento', 'c': '2110'}}
-DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}, 'DELFINANCE': {'n': 'Delfinance', 'r': '99'}}
+# ==========================================
+# 🧠 BANCO DE DADOS MULTI-EMPRESAS
+# Albert, pode adicionar quantas empresas quiser aqui abaixo!
+# ==========================================
+BANCO_DE_DADOS_EMPRESAS = {
+    "SELECT OPERATIONS S.A.": {
+        "impostos": {
+            '0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, 
+            '2172': {'n': 'COFINS Faturamento', 'c': '2108'}, 
+            '8109': {'n': 'PIS Faturamento', 'c': '2110'}
+        },
+        "bancos": {
+            'ITAU': {'n': 'Itaú', 'r': '10'}, 
+            'BRAD': {'n': 'Bradesco', 'r': '20'}, 
+            'SANTANDER': {'n': 'Santander', 'r': '30'}, 
+            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'}, 
+            'DELFIN': {'n': 'Delfinance MMABET', 'r': '1107'}, 
+            'DELFINANCE': {'n': 'Delfinance MMABET', 'r': '1107'}
+        },
+        "fornecedores": {
+            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '2050',
+            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '2051',
+            'BUZZCRAFT DIGITAL LTDA': '2052',
+            'AM PUBLICIDADE E PROMOCAO DE VENDAS LTDA': '2053',
+            'UNIFICAPAY SERVICOS FINANCEIROS E DE PAGAMENTOS LTDA': '2054',
+            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '2055',
+            'DUCAMPELO PARTICIPACOES LTDA': '2056'
+            # Adicione mais fornecedores da Select Operations aqui...
+        }
+    },
+    "EMPRESA PADRÃO (Genérica)": {
+        "impostos": {
+            '0561': {'n': 'IRRF Genérico', 'c': '9999'}, 
+            '2172': {'n': 'COFINS Genérico', 'c': '9999'}
+        },
+        "bancos": {
+            'ITAU': {'n': 'Itaú', 'r': '99'}, 
+            'BRAD': {'n': 'Bradesco', 'r': '99'}, 
+            'SANTANDER': {'n': 'Santander', 'r': '99'}, 
+            'BRASIL': {'n': 'B. Brasil', 'r': '99'}, 
+            'DELFIN': {'n': 'Delfinance', 'r': '99'}
+        },
+        "fornecedores": {} # Vazio, usará sempre 9999
+    }
+    # Para adicionar a "EMPRESA B", basta copiar o bloco acima e colar aqui com os novos códigos!
+}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V23.0")
-st.markdown("Filtro Direcional: Separação automática de Débitos (Vermelho) e Créditos (Verde).")
+st.title("🏦 Conciliador Contábil IA V24.0")
+st.markdown("Plataforma Multi-Empresas: Códigos contábeis adaptam-se automaticamente à empresa selecionada.")
 
 with st.sidebar:
+    st.header("🏢 Empresa em Conciliação")
+    empresa_selecionada = st.selectbox(
+        "Qual empresa está a conciliar agora?", 
+        list(BANCO_DE_DADOS_EMPRESAS.keys())
+    )
+    
+    # Carrega as configurações da empresa escolhida
+    config_atual = BANCO_DE_DADOS_EMPRESAS[empresa_selecionada]
+    mapa_imp = config_atual["impostos"]
+    mapa_bancos = config_atual["bancos"]
+    mapa_fornecedores = config_atual["fornecedores"]
+    
+    st.divider()
     st.header("🎯 Natureza da Conciliação")
     modo_conciliacao = st.radio(
         "O que estamos a conciliar?", 
@@ -217,13 +270,11 @@ with st.sidebar:
     termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
     
     st.divider()
-    st.header("📋 Plano de Contas")
-    mapa_imp = {cod: {'conta': st.text_input(f"{info['n']} ({cod})", info['c'], key=f"imp_{cod}"), 'nome': info['n']} for cod, info in DEFAULTS_IMPOSTOS.items()}
-    mapa_bancos = {k: {'reduzido': st.text_input(f"Cod. {v['n']} ({k})", v['r'], key=f"banco_{k}"), 'nome': v['n']} for k, v in DEFAULTS_BANCOS.items()}
+    st.success(f"✅ Códigos carregados para: **{empresa_selecionada}**")
 
 c1, c2 = st.columns(2)
-with c1: excel_file = st.file_uploader("📂 Relatório Domínio", type=["xlsx", "xls", "csv"])
-with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos", type=["pdf", "png", "jpg", "xlsx", "xls", "csv"], accept_multiple_files=True)
+with c1: excel_file = st.file_uploader("📂 Relatório Domínio (Excel/CSV)", type=["xlsx", "xls", "csv"])
+with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos (Múltiplos)", type=["pdf", "png", "jpg"], accept_multiple_files=True)
 
 if excel_file and receipt_files:
     try:
@@ -242,11 +293,11 @@ if excel_file and receipt_files:
         
         df_dom = df_dom.reset_index(drop=True)
     except Exception as e:
-        st.error(f"Erro ao ler planilha: {e}"); st.stop()
+        st.error(f"Erro ao ler ficheiro: {e}"); st.stop()
 
     todas_transacoes_pdf = []
     for f in receipt_files:
-        with st.spinner(f"Lendo {f.name}..."):
+        with st.spinner(f"A processar {f.name}..."):
             todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar, modo_conciliacao))
 
     rows, ids_pdf_usados = [], set()
@@ -263,15 +314,29 @@ if excel_file and receipt_files:
                     d_pdf_obj = datetime.strptime(d_pdf_str, '%d/%m/%Y').date()
                     if abs(v_ex - doc['Total']) < 0.05 and abs((d_ex_obj - d_pdf_obj).days) <= tolerancia_dias:
                         regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
-                        b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '99'})
+                        b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
                         
                         fav_final = str(l.get(c_cli, '')).upper()
                         if fav_final == "NAN" or not fav_final: fav_final = doc['Fav']
+                        
+                        # Cérebro Multi-Empresas: Determinar Conta de Débito
+                        conta_debito = '9999'
+                        if regra_imp['nome'] != '-':
+                            conta_debito = regra_imp['conta']
+                        else:
+                            # Procura a correspondência no mapa da empresa selecionada
+                            if fav_final in mapa_fornecedores:
+                                conta_debito = mapa_fornecedores[fav_final]
+                            else:
+                                for f_nome, f_conta in mapa_fornecedores.items():
+                                    if f_nome in fav_final:
+                                        conta_debito = f_conta
+                                        break
 
                         rows.append({
                             'Status': '✅ CONCILIADO', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Valor Total': v_ex,
                             'Imposto': regra_imp['nome'], 'Favorecido': fav_final, 'Data PDF': d_pdf_obj.strftime('%d/%m/%Y'),
-                            'Banco': b_inf['nome'], 'Débito': regra_imp['conta'], 'Crédito': b_inf['reduzido'], 
+                            'Banco': b_inf['nome'], 'Débito': conta_debito, 'Crédito': b_inf['reduzido'], 
                             'Principal': doc.get('Principal', v_ex), 'Multa': doc.get('Multa', 0.0), 'Juros': doc.get('Juros', 0.0),
                             'Cód. Receita': doc['Cod'], 'Arquivo': doc['Arq']
                         })
@@ -283,11 +348,11 @@ if excel_file and receipt_files:
 
     for i, doc in enumerate(todas_transacoes_pdf):
         if i not in ids_pdf_usados:
-            b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '99'})
+            b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
             rows.append({'Status': '⚠️ SÓ NO PDF', 'Data PDF': doc['Data'][0], 'Valor Total': doc['Total'], 'Imposto': mapa_imp.get(doc['Cod'], {'nome':'-'})['nome'], 'Favorecido': doc['Fav'], 'Banco': b_inf['nome'], 'Arquivo': doc['Arq']})
 
     res_df = pd.DataFrame(rows).fillna("-")
-    st.subheader("📋 Relatório de Conciliação")
+    st.subheader(f"📋 Relatório de Conciliação - {empresa_selecionada}")
     disp = res_df.copy()
     col_order = ['Status', 'Data Excel', 'Valor Total', 'Imposto', 'Favorecido', 'Data PDF', 'Banco', 'Débito', 'Crédito', 'Principal', 'Multa', 'Juros', 'Cód. Receita', 'Arquivo']
     disp = disp[[c for c in col_order if c in disp.columns]]
@@ -303,4 +368,6 @@ if excel_file and receipt_files:
     
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
-    st.download_button("📥 Baixar Excel", out.getvalue(), "conciliacao.xlsx")
+    
+    nome_arquivo = f"conciliacao_{empresa_selecionada.split()[0].lower()}.xlsx"
+    st.download_button("📥 Baixar Excel Multi-Empresas", out.getvalue(), nome_arquivo)
