@@ -102,11 +102,11 @@ def limpar_nome_contabil(nome):
     palavras = [w for w in n.split() if len(w) > 1]
     resultado = ' '.join(palavras).strip()
     
-    # Se só sobrou lixo de conexão, retorna vazio (isso mata a linha do Saldo)
+    # Se só sobrou lixo de conexão, retorna vazio
     if not resultado or resultado in ["DE", "DA", "DO", "PARA", "EM"]: return ""
     return resultado
 
-def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
+def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
     transacoes = []
     banco_base = ""
     for b_key in mapa_bancos.keys():
@@ -125,8 +125,9 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                     if not texto_pagina: continue
                     for linha in texto_pagina.split('\n'):
                         
-                        # Filtro Anti-Lixo Mestre: Pula linhas claras de Saldo
-                        if any(x in linha.upper() for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
+                        # Filtro Anti-Lixo Mestre: Pula linhas personalizadas pelo utilizador (CONNECTPSP, SALDO, etc)
+                        linha_upper = linha.upper()
+                        if any(t in linha_upper for t in termos_ignorar if t): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
                         valor_match = re.findall(r'(\d[\d\.]*,\d{2})', linha)
@@ -135,7 +136,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                             desc_bruta = linha.replace(data_match.group(1), "")
                             for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
                             
-                            # A mágica que remove os 40.811,53 fantasmas
+                            # A mágica que remove nomes vazios fantasmas
                             nome_limpo = limpar_nome_contabil(desc_bruta)
                             if not nome_limpo: continue
 
@@ -176,21 +177,30 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}, 'DELFINANCE': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V21.0")
-st.markdown("Filtro Supremo: Remoção de linhas fantasmas e validação exata do Excel.")
+st.title("🏦 Conciliador Contábil IA V22.0")
+st.markdown("Filtro Personalizado: Elimine taxas de gateway e lixo do extrato com facilidade.")
 
 with st.sidebar:
     st.header("⚙️ Parâmetros")
     tolerancia_dias = st.slider("Tolerância de Datas (dias):", 0, 10, 3)
+    
+    st.divider()
+    st.header("🚫 Filtro de Extrato")
+    st.markdown("<small>As linhas com estes termos serão totalmente ignoradas:</small>", unsafe_allow_html=True)
+    ignorar_txt = st.text_area(
+        "", 
+        "CONNECTPSP, SALDO, RESUMO, DISPONÍVEL, DISPONIVEL, TOTAL ACUMULADOR, SALDO EM"
+    )
+    termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
+    
     st.divider()
     st.header("📋 Plano de Contas")
-    
     mapa_imp = {cod: {'conta': st.text_input(f"{info['n']} ({cod})", info['c'], key=f"imp_{cod}"), 'nome': info['n']} for cod, info in DEFAULTS_IMPOSTOS.items()}
     mapa_bancos = {k: {'reduzido': st.text_input(f"Cod. {v['n']} ({k})", v['r'], key=f"banco_{k}"), 'nome': v['n']} for k, v in DEFAULTS_BANCOS.items()}
 
 c1, c2 = st.columns(2)
 with c1: excel_file = st.file_uploader("📂 Relatório Domínio", type=["xlsx", "xls", "csv"])
-with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos", type=["pdf", "png", "jpg", "xlsx", "xls", "csv"], accept_multiple_files=True)
+with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos", type=["pdf", "png", "jpg", "xlsx", "xls", "csv], accept_multiple_files=True)
 
 if excel_file and receipt_files:
     try:
@@ -214,7 +224,7 @@ if excel_file and receipt_files:
     todas_transacoes_pdf = []
     for f in receipt_files:
         with st.spinner(f"Lendo {f.name}..."):
-            todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True))
+            todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar))
 
     rows, ids_pdf_usados = [], set()
     for idx, l in df_dom.iterrows():
