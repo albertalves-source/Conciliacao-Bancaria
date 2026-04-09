@@ -69,42 +69,42 @@ def converter_data_dominio(data_obj):
         return None
 
 def limpar_nome_contabil(nome):
-    """Limpeza Suprema: Destrói qualquer ID técnico, mantendo apenas o nome puro."""
+    """Limpeza Suprema: Destrói qualquer ID técnico e limpa fantasmas."""
     if not nome or str(nome).lower() in ["n/a", "nan", "0", "none"]: return ""
     
     n = str(nome).upper()
     
-    # 1. Remove símbolos de moeda
-    n = n.replace('R$', '').replace('$', '')
+    # 1. Remove REGEX pesados (CPFs, UUIDs, Alfanuméricos do PIX)
+    n = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', n)
+    n = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', n) # Destrói qualquer palavra que tenha número no meio
     
-    # 2. Termos técnicos do banco que vêm antes do nome real
+    # 2. Remove "R$" e variações que causam linhas fantasmas
+    n = n.replace('R$', '').replace('$', '').replace('DE R', '')
+    
+    # 3. Termos técnicos de extrato
     termos_bancarios = [
         "PIX ENVIADO PARA:", "PIX RECEBIDO PAGADOR:", "PIX ENVIADO PARA", "PIX RECEBIDO",
         "TRANSFERENCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA", 
         "TRANSFERENCIA RECEBIDA PAGADOR:", "TRANSFERÊNCIA RECEBIDA PAGADOR:", "TRANSFERÊNCIA RECEBIDA",
         "TED ENVIADA PARA:", "TED ENVIADA PARA", "TED RECEBIDA", 
         "DEVOLUÇÃO DE PIX ENVIADO (DESFAZIMENTO)", "DEVOLUCAO DE PIX ENVIADO (DESFAZIMENTO)",
-        "DEVOLUÇÃO DE PIX ENVIADO", "DESFAZIMENTO",
+        "DEVOLUÇÃO DE PIX ENVIADO", "DESFAZIMENTO", 
         "PAGADOR:", "BENEFICIARIO:", "RAZAO SOCIAL:", "FAVORECIDO:", "VALOR PAGO", "DATA DO PAGAMENTO", 
-        "PAGAMENTO DE BOLETO", "BOLETO", "PAYMENT", "SALDO DISPONÍVEL", "SALDO DISPONIVEL", "COMPROVANTE FISCAL", "COMPROVANTE"
+        "PAGAMENTO DE BOLETO", "BOLETO", "PAYMENT", "SALDO DISPONÍVEL", "SALDO DISPONIVEL", "COMPROVANTE FISCAL", "COMPROVANTE", "SALDO"
     ]
     for t in termos_bancarios:
         n = n.replace(t, '')
         
-    # 3. Remove pontuações que grudam IDs (pontos, hífens, barras, vírgulas)
-    n = re.sub(r'[\.\-\/\,]', '', n)
+    # 4. Limpa pontuação residual
+    n = re.sub(r'[\.\-\/\,:\(\)_]', ' ', n)
     
-    # 4. REGRA DE OURO: Remove QUALQUER palavra que contenha NÚMEROS.
-    # Isso destrói instantaneamente CPFs, contas bancárias e IDs hexadecimais do PIX (ex: F469, B4D85B1A)
-    n = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', n)
-    
-    # 5. Remove espaços extras e caracteres residuais
-    n = re.sub(r'[:\(\)_]', ' ', n)
-    
-    palavras = [w for w in n.split() if len(w) > 1] # Remove letras isoladas
+    # 5. Remove palavras vazias ou sobras minúsculas
+    palavras = [w for w in n.split() if len(w) > 1]
     resultado = ' '.join(palavras).strip()
     
-    return resultado if resultado else "EXTRATO BANCARIO"
+    # Se só sobrou lixo de conexão, retorna vazio (isso mata a linha do Saldo)
+    if not resultado or resultado in ["DE", "DA", "DO", "PARA", "EM"]: return ""
+    return resultado
 
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
     transacoes = []
@@ -125,7 +125,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                     if not texto_pagina: continue
                     for linha in texto_pagina.split('\n'):
                         
-                        # Filtro Anti-Lixo: Pula explicitamente linhas de Saldo e Acumuladores
+                        # Filtro Anti-Lixo Mestre: Pula linhas claras de Saldo
                         if any(x in linha.upper() for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
@@ -135,6 +135,10 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                             desc_bruta = linha.replace(data_match.group(1), "")
                             for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
                             
+                            # A mágica que remove os 40.811,53 fantasmas
+                            nome_limpo = limpar_nome_contabil(desc_bruta)
+                            if not nome_limpo: continue
+
                             # Cód. Receita: Apenas códigos validados do plano
                             cod_found = ""
                             codes = re.findall(r'\b(\d{4})\b', linha)
@@ -144,7 +148,6 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                             for v_txt in valor_match:
                                 val = limpar_valor(v_txt)
                                 if val > 0:
-                                    nome_limpo = limpar_nome_contabil(desc_bruta)
                                     transacoes.append({
                                         'Data': [data_match.group(1)], 'Total': val,
                                         'Cod': cod_found, 'Fav': nome_limpo, 
@@ -161,7 +164,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                         v_f = limpar_valor(valores[-1])
                         transacoes.append({
                             'Data': datas, 'Total': v_f, 'Cod': rec.group(1) if rec else "",
-                            'Banc': banco_base, 'Fav': "COMPROVANTE",
+                            'Banc': banco_base, 'Fav': "COMPROVANTE FISCAL",
                             'IA': False, 'Arq': file.name, 'Principal': v_f, 'Multa': 0.0, 'Juros': 0.0
                         })
         except: pass
@@ -173,8 +176,8 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}, 'DELFINANCE': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V20.1")
-st.markdown("Filtro Supremo: Bloqueio absoluto de IDs de transação e saldos bancários.")
+st.title("🏦 Conciliador Contábil IA V21.0")
+st.markdown("Filtro Supremo: Remoção de linhas fantasmas e validação exata do Excel.")
 
 with st.sidebar:
     st.header("⚙️ Parâmetros")
@@ -182,26 +185,22 @@ with st.sidebar:
     st.divider()
     st.header("📋 Plano de Contas")
     
-    # CORREÇÃO CRÍTICA: Adicionado o parâmetro 'key' único para cada input de imposto e banco
     mapa_imp = {cod: {'conta': st.text_input(f"{info['n']} ({cod})", info['c'], key=f"imp_{cod}"), 'nome': info['n']} for cod, info in DEFAULTS_IMPOSTOS.items()}
     mapa_bancos = {k: {'reduzido': st.text_input(f"Cod. {v['n']} ({k})", v['r'], key=f"banco_{k}"), 'nome': v['n']} for k, v in DEFAULTS_BANCOS.items()}
 
 c1, c2 = st.columns(2)
 with c1: excel_file = st.file_uploader("📂 Relatório Domínio", type=["xlsx", "xls", "csv"])
-with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos", type=["pdf", "png", "jpg"], accept_multiple_files=True)
+with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos", type=["pdf", "png", "jpg", "xlsx", "xls", "csv"], accept_multiple_files=True)
 
 if excel_file and receipt_files:
     try:
         if excel_file.name.endswith('.csv'):
-            # Usa o sep padrão e remove colunas totalmente vazias
             df_dom = pd.read_csv(excel_file, engine='python')
             df_dom = df_dom.dropna(how='all', axis=1)
         else:
             df_dom = pd.read_excel(excel_file)
             
         df_dom.columns = [str(c).replace('\n', ' ').strip() for c in df_dom.columns]
-        
-        # Filtra linhas de Totalizador do Excel
         df_dom = df_dom[~df_dom.astype(str).apply(lambda x: x.str.contains('Total Acumulador', case=False, na=False)).any(axis=1)]
         
         c_d = next((c for c in df_dom.columns if "data" in c.lower()), None)
@@ -233,7 +232,6 @@ if excel_file and receipt_files:
                         regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
                         b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '99'})
                         
-                        # MASTER FIX: Se conciliou, usa o Favorecido do EXCEL
                         fav_final = str(l.get(c_cli, '')).upper()
                         if fav_final == "NAN" or not fav_final: fav_final = doc['Fav']
 
@@ -272,4 +270,4 @@ if excel_file and receipt_files:
     
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
-    st.download_button("📥 Baixar Excel Supremo", out.getvalue(), "conciliacao_suprema.xlsx")
+    st.download_button("📥 Baixar Excel", out.getvalue(), "conciliacao.xlsx")
