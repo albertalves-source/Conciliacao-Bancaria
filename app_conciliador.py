@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import pdfplumber
 import re
 import io
 import warnings
@@ -8,58 +7,59 @@ import requests
 import json
 import time
 
-# Configurações de Página - Nome e Ícone do site
-st.set_page_config(page_title="Portal de Conciliação Contábil IA", layout="wide", page_icon="🤖")
+# Tenta importar bibliotecas extras de forma segura
+try:
+    import pdfplumber
+except ImportError:
+    st.error("Erro: A biblioteca 'pdfplumber' não foi encontrada. Verifique o seu requirements.txt.")
+
+# Configurações de Página
+st.set_page_config(page_title="Portal de Conciliação Contábil IA", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
 # --- CONFIGURAÇÃO DA IA (GEMINI) ---
-api_key = "" # A chave é injetada automaticamente pelo ambiente
+# A chave deve ser configurada em 'Settings' -> 'Secrets' no painel do Streamlit Cloud
+api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 def consultar_ia(texto_pdf):
-    """Consulta a IA Gemini para identificar impostos ou bancos desconhecidos."""
+    if not api_key: return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
     
     prompt = f"""
-    Você é um assistente contábil especialista em impostos brasileiros e sistemas bancários.
-    Analise o seguinte texto extraído de um comprovante PDF e identifique:
-    1. Nome do Imposto (ex: IRPJ, ISS, Taxa de Licenciamento).
-    2. Código da Receita (4 dígitos, se houver).
-    3. Nome do Banco.
-    
-    Responda APENAS em formato JSON como no exemplo:
-    {{"imposto_nome": "Nome Encontrado", "codigo_receita": "0000", "banco_nome": "Nome do Banco"}}
-    
-    Texto do PDF:
-    {texto_pdf[:2000]}
+    Você é um assistente contábil. Analise o texto do comprovante e extraia JSON:
+    {{
+      "imposto_nome": "Nome do Imposto",
+      "codigo_receita": "4 dígitos",
+      "banco_nome": "Nome do Banco"
+    }}
+    Texto: {texto_pdf[:1500]}
     """
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
         "generationConfig": {"responseMimeType": "application/json"}
     }
     
-    for delay in [1, 2, 4]:
-        try:
-            response = requests.post(url, json=payload, timeout=30)
-            if response.status_code == 200:
-                result = response.json()
-                content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
-                return json.loads(content)
-            time.sleep(delay)
-        except:
-            time.sleep(delay)
+    try:
+        response = requests.post(url, json=payload, timeout=15)
+        if response.status_code == 200:
+            res_json = response.json()
+            content = res_json['candidates'][0]['content']['parts'][0]['text']
+            return json.loads(content)
+    except:
+        return None
     return None
 
-# --- ESTILIZAÇÃO PARA ADAPTAÇÃO DE TEMA ---
+# --- ESTILIZAÇÃO E PERFUMARIA ---
 st.markdown("""
     <style>
-    /* Estilo para os cartões de métricas se adaptarem ao tema */
+    /* Estilização para cartões e tabelas */
+    [data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; }
     div[data-testid="metric-container"] {
         border: 1px solid rgba(128, 128, 128, 0.2);
         padding: 20px;
         border-radius: 15px;
-        background-color: rgba(128, 128, 128, 0.05);
+        background-color: rgba(128, 128, 128, 0.03);
     }
     .stDataFrame { border-radius: 12px; }
     </style>
@@ -68,15 +68,18 @@ st.markdown("""
 # --- FUNÇÕES DE APOIO ---
 def formatar_moeda(v):
     """Formata valor para padrão R$ 1.234,56."""
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    try:
+        val = float(v)
+        return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return "R$ 0,00"
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
-    if isinstance(v, (int, float)): return float(v)
-    v_limpo = str(v).replace('R$', '').replace('$', '').strip()
-    if ',' in v_limpo and '.' in v_limpo: v_limpo = v_limpo.replace('.', '').replace(',', '.')
-    elif ',' in v_limpo: v_limpo = v_limpo.replace(',', '.')
-    try: return float(v_limpo)
+    v_str = str(v).replace('R$', '').replace('$', '').replace(' ', '').strip()
+    if ',' in v_str and '.' in v_str: v_str = v_str.replace('.', '').replace(',', '.')
+    elif ',' in v_str: v_str = v_str.replace(',', '.')
+    try: return float(v_str)
     except: return 0.0
 
 def padronizar_data(data_obj):
@@ -85,216 +88,200 @@ def padronizar_data(data_obj):
         match = re.search(r'(\d{2}/\d{2}/\d{4})', str(data_obj))
         return match.group(1) if match else str(data_obj)
 
-def limpar_nome_favorecido(nome):
-    if not nome or nome == "N/A": return "N/A"
-    nome = re.sub(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2}', '', nome)
-    termos = ["DATA DO", "PAGAMENTO", "BENEFICIARIO", "RAZAO SOCIAL", "NOME", "FAVORECIDO", "VALOR PAGO"]
+def limpar_nome_contabil(nome):
+    if not nome or str(nome).lower() in ["n/a", "nan", "0"]: return ""
+    nome = re.sub(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2}', '', str(nome))
+    termos = ["DATA DO", "PAGAMENTO", "BENEFICIARIO", "RAZAO SOCIAL", "NOME", "FAVORECIDO"]
     for t in termos: nome = re.sub(t, '', nome, flags=re.IGNORECASE)
     return nome.replace(':', '').strip().upper()
 
-def extrair_detalhes_pdf(file_pdf, mapa_bancos, usar_ia=False):
-    detalhes = {'Data': [], 'Total': 0.0, 'Principal': 0.0, 'Multa': 0.0, 'Juros': 0.0, 
-                'Codigo_Receita': "N/A", 'Favorecido': "N/A", 'Banco': "N/A", 'IA_Usada': False}
+def extrair_detalhes_pdf(file_pdf, mapa_bancos, usar_ia):
+    det = {'Data': [], 'Total': 0.0, 'Principal': 0.0, 'Multa': 0.0, 'Juros': 0.0, 
+           'Cod': "", 'Fav': "", 'Banc': "", 'IA': False, 'IA_Imp': ""}
     try:
         with pdfplumber.open(file_pdf) as pdf:
             texto = pdf.pages[0].extract_text()
             if not texto: return None
             texto_upper = texto.upper()
-            detalhes['Data'] = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto)))
-            receita = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto, re.IGNORECASE)
-            if receita: detalhes['Codigo_Receita'] = receita.group(1)
+            det['Data'] = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto)))
             
-            for termo_busca in mapa_bancos.keys():
-                if termo_busca in texto_upper:
-                    detalhes['Banco'] = termo_busca
+            rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto, re.IGNORECASE)
+            if rec: det['Cod'] = rec.group(1)
+            
+            for termo, info in mapa_bancos.items():
+                if termo in texto_upper:
+                    det['Banc'] = termo
                     break
             
-            valores_txt = re.findall(r'(\d[\d\.]*,\d{2})', texto)
-            if valores_txt:
-                detalhes['Total'] = limpar_valor(valores_txt[-1])
-                if len(valores_txt) >= 4:
-                    detalhes['Principal'] = limpar_valor(valores_txt[-4])
-                    detalhes['Multa'] = limpar_valor(valores_txt[-3])
-                    detalhes['Juros'] = limpar_valor(valores_txt[-2])
-                else: detalhes['Principal'] = detalhes['Total']
+            # Captura de valores
+            vals = re.findall(r'(\d[\d\.]*,\d{2})', texto)
+            if vals:
+                det['Total'] = limpar_valor(vals[-1])
+                if len(vals) >= 4:
+                    det['Principal'] = limpar_valor(vals[-4])
+                    det['Multa'] = limpar_valor(vals[-3])
+                    det['Juros'] = limpar_valor(vals[-2])
+                else: det['Principal'] = det['Total']
             
-            if usar_ia and (detalhes['Codigo_Receita'] == "N/A" or detalhes['Banco'] == "N/A"):
-                with st.spinner(f"IA analisando {file_pdf.name}..."):
-                    ia_res = consultar_ia(texto)
-                    if ia_res:
-                        if detalhes['Codigo_Receita'] == "N/A": 
-                            detalhes['Codigo_Receita'] = ia_res.get('codigo_receita', "N/A")
-                            detalhes['IA_Imposto'] = ia_res.get('imposto_nome')
-                        if detalhes['Banco'] == "N/A": 
-                            detalhes['IA_Banco'] = ia_res.get('banco_nome')
-                        detalhes['IA_Usada'] = True
+            # Consultar IA se faltar algo crítico
+            if usar_ia and api_key and (not det['Cod'] or not det['Banc']):
+                ia_res = consultar_ia(texto)
+                if ia_res:
+                    det['Cod'] = ia_res.get('codigo_receita', det['Cod'])
+                    det['IA_Imp'] = ia_res.get('imposto_nome', "")
+                    det['IA'] = True
 
+            # Captura de Favorecido
             for linha in texto.split('\n'):
                 if any(x in linha.upper() for x in ["BENEFICIARIO", "RAZAO SOCIAL", "NOME", "FAVORECIDO"]):
-                    bruto = linha.split(':')[-1].strip() if ':' in linha else linha
-                    detalhes['Favorecido'] = limpar_nome_favorecido(bruto)
+                    det['Fav'] = limpar_nome_contabil(linha.split(':')[-1] if ':' in linha else linha)
                     break
     except: pass
-    return detalhes
+    return det
 
-# --- BIBLIOTECA PADRÃO DE IMPOSTOS ---
+# --- BIBLIOTECA PADRÃO ---
 DEFAULTS_IMPOSTOS = {
-    '0561': {'nome': 'IRRF s/ Salários', 'conta': '2105'},
-    '2172': {'nome': 'COFINS - Faturamento', 'conta': '2108'},
-    '8109': {'nome': 'PIS - Faturamento', 'conta': '2110'},
-    '5952': {'nome': 'CSRF (PIS/COF/CSLL)', 'conta': '2115'},
+    '0561': {'n': 'IRRF s/ Salários', 'c': '2105'},
+    '2172': {'n': 'COFINS Faturamento', 'c': '2108'},
+    '8109': {'n': 'PIS Faturamento', 'c': '2110'},
+    '5952': {'n': 'CSRF Retenções', 'c': '2115'},
 }
 
 DEFAULTS_BANCOS = {
-    'ITAU': {'nome': 'Itaú', 'reduzido': '10'},
-    'BRAD': {'nome': 'Bradesco', 'reduzido': '20'},
-    'SANTANDER': {'nome': 'Santander', 'reduzido': '30'},
-    'BRASIL': {'nome': 'Banco do Brasil', 'reduzido': '01'},
-    'CAIXA': {'nome': 'Caixa Econômica', 'reduzido': '05'},
+    'ITAU': {'n': 'Itaú', 'r': '10'},
+    'BRAD': {'n': 'Bradesco', 'r': '20'},
+    'SANTANDER': {'n': 'Santander', 'r': '30'},
+    'BRASIL': {'n': 'B. Brasil', 'r': '01'},
+    'CAIXA': {'n': 'Caixa', 'r': '05'},
 }
 
 # --- INTERFACE PRINCIPAL ---
-st.title("🏦 Portal de Conciliação com IA")
-st.markdown("Automatize a conferência contábil e gere lançamentos para o sistema Domínio.")
+st.title("🏦 Portal de Conciliação Contábil IA")
+st.markdown("Sistema automatizado para conferência de impostos e comprovantes bancários.")
 
 with st.sidebar:
     st.header("🤖 Inteligência Artificial")
-    usar_ia = st.toggle("Ativar IA (Gemini 2.5 Flash)", value=True)
+    ia_on = st.toggle("Ativar IA (Gemini)", value=True)
+    if not api_key: st.warning("⚠️ Chave API não configurada nos Secrets.")
     
     st.header("⚙️ Plano de Contas")
     mapa_imp = {}
     with st.expander("Contas de Impostos"):
         for cod, info in DEFAULTS_IMPOSTOS.items():
-            conta = st.text_input(f"{info['nome']} ({cod})", info['conta'], key=f"imp_{cod}")
-            mapa_imp[cod] = {'conta': conta, 'nome': info['nome']}
+            c = st.text_input(f"{info['n']} ({cod})", info['c'], key=f"i_{cod}")
+            mapa_imp[cod] = {'conta': c, 'nome': info['n']}
     
     mapa_banc = {}
     with st.expander("Contas de Bancos"):
         for k, v in DEFAULTS_BANCOS.items():
-            reduzido = st.text_input(f"Reduzido {v['nome']}", v['reduzido'], key=f"banc_{k}")
-            mapa_banc[k] = {'reduzido': reduzido, 'nome': v['nome']}
+            r = st.text_input(f"Cod. {v['n']}", v['r'], key=f"b_{k}")
+            mapa_banc[k] = {'reduzido': r, 'nome': v['n']}
 
 # ÁREA DE UPLOAD
-col_up1, col_up2 = st.columns(2)
-with col_up1:
-    excel_file = st.file_uploader("📂 Relatório Domínio (Excel)", type=["xlsx", "xls"])
-with col_up2:
-    pdf_files = st.file_uploader("📄 Comprovantes (PDFs)", type=["pdf"], accept_multiple_files=True)
+u1, u2 = st.columns(2)
+ex_file = u1.file_uploader("📂 Relatório Domínio (Excel)", type=["xlsx", "xls"])
+pdf_files = u2.file_uploader("📄 Comprovantes (PDFs)", type=["pdf"], accept_multiple_files=True)
 
-if excel_file and pdf_files:
-    # 1. Carregar Excel
+if ex_file and pdf_files:
+    # 1. Processar Excel
     df_dom = None
     for p in range(15):
         try:
-            temp = pd.read_excel(excel_file, skiprows=p)
-            cols = [str(c).lower().strip() for c in temp.columns]
+            tmp = pd.read_excel(ex_file, skiprows=p)
+            cols = [str(c).lower().strip() for c in tmp.columns]
             if any("data" in c or "dt" in c for c in cols) and any("valor" in c or "vlr" in c for c in cols):
-                c_data = next(c for c in cols if "data" in c or "dt" in c)
-                c_valor = next(c for c in cols if "valor" in c or "vlr" in c)
-                mapeamento = {str(orig).lower().strip(): orig for orig in temp.columns}
-                col_data_real, col_valor_real = mapeamento[c_data], mapeamento[c_valor]
-                df_dom = temp
-                break
+                c_d = next(c for c in tmp.columns if "data" in str(c).lower() or "dt" in str(c).lower())
+                c_v = next(c for c in tmp.columns if "valor" in str(c).lower() or "vlr" in str(c).lower())
+                df_dom = tmp; break
         except: continue
 
     if df_dom is not None:
         # 2. Processar PDFs
-        list_pdf_data = []
-        for pdf in pdf_files:
-            info = extrair_detalhes_pdf(pdf, mapa_banc, usar_ia=usar_ia)
-            if info: info['Arquivo'] = pdf.name; list_pdf_data.append(info)
+        list_pdf = []
+        for p in pdf_files:
+            info = extrair_detalhes_pdf(p, mapa_banc, ia_on)
+            if info: info['Arq'] = p.name; list_pdf.append(info)
         
-        # 3. Cruzamento de Dados
-        final_rows = []
-        pdfs_usados = set()
+        # 3. Conciliação
+        rows = []
+        pdf_usados = set()
+        
         for _, linha in df_dom.iterrows():
-            v_dom = limpar_valor(linha[col_valor_real])
-            if v_dom == 0: continue
-            d_dom = padronizar_data(linha[col_data_real])
+            v_ex = limpar_valor(linha[c_v])
+            if v_ex == 0: continue
+            d_ex = padronizar_data(linha[c_d])
             match = False
-            for doc in list_pdf_data:
-                if abs(v_dom - doc['Total']) < 0.01 and d_dom in doc['Data']:
-                    imp_info = mapa_imp.get(doc['Codigo_Receita'], {'conta': '9999', 'nome': doc.get('IA_Imposto', 'FORNECEDOR/OUTROS')})
-                    banc_info = mapa_banc.get(doc['Banco'], {'nome': doc.get('IA_Banco', 'BANCO'), 'reduzido': '99'})
+            
+            for d in list_pdf:
+                if abs(v_ex - d['Total']) < 0.01 and d_ex in d['Data']:
+                    i_info = mapa_imp.get(d['Cod'], {'conta': '9999', 'nome': d.get('IA_Imp', 'FORNECEDOR/OUTROS')})
+                    b_info = mapa_banc.get(d['Banc'], {'nome': 'BANCO', 'reduzido': '99'})
                     
-                    final_rows.append({
-                        'Status': '✅ CONCILIADO', 'Data': d_dom, 'Valor Total': v_dom,
-                        'Débito': imp_info['conta'], 'Crédito': banc_info['reduzido'],
-                        'Imposto': imp_info['nome'], 'Histórico': f"PAGTO {imp_info['nome']} VIA {banc_info['nome']} REF {d_dom}",
-                        'Principal': doc['Principal'], 'Multa': doc['Multa'], 'Juros': doc['Juros'],
-                        'IA': '✨' if doc['IA_Usada'] else '', 'Arquivo': doc['Arquivo'], 'Favorecido': doc['Favorecido']
+                    rows.append({
+                        'Status': '✅ CONCILIADO', 'Data': d_ex, 'Valor Total': v_ex,
+                        'Débito': i_info['conta'], 'Crédito': b_info['reduzido'], 'Imposto': i_info['nome'],
+                        'Histórico': f"PAGTO {i_info['nome']} VIA {b_info['nome']} REF {d_ex}",
+                        'Principal': d['Principal'], 'Multa': d['Multa'], 'Juros': d['Juros'],
+                        'Favorecido': d['Fav'] if d['Fav'] else limpar_nome_contabil(linha.get('Cliente', '')),
+                        'IA': '✨' if d['IA'] else '', 'Arquivo': d['Arq']
                     })
-                    pdfs_usados.add(doc['Arquivo']); match = True; break
+                    pdf_usados.add(d['Arq']); match = True; break
+            
             if not match:
-                final_rows.append({
-                    'Status': '❌ FALTA PDF', 'Data': d_dom, 'Valor Total': v_dom,
-                    'Débito': '9999', 'Crédito': '99', 'Imposto': 'N/A', 'IA': '', 'Arquivo': 'N/A',
-                    'Favorecido': limpar_nome_favorecido(str(linha.get('Cliente', 'N/A')))
+                rows.append({
+                    'Status': '❌ FALTA PDF', 'Data': d_ex, 'Valor Total': v_ex,
+                    'Débito': '9999', 'Crédito': '99', 'Imposto': '', 'Histórico': 'NÃO LOCALIZADO',
+                    'Principal': 0, 'Multa': 0, 'Juros': 0, 'Favorecido': limpar_nome_contabil(linha.get('Cliente', 'N/A')), 'IA': '', 'Arquivo': ''
                 })
 
-        # Sobras de PDFs
-        for doc in list_pdf_data:
-            if doc['Arquivo'] not in pdfs_usados:
-                imp_info = mapa_imp.get(doc['Codigo_Receita'], {'conta': '9999', 'nome': doc.get('IA_Imposto', 'PDF NÃO IDENTIFICADO')})
-                final_rows.append({
-                    'Status': '⚠️ SÓ NO PDF', 'Data': doc['Data'][0] if doc['Data'] else "N/A", 'Valor Total': doc['Total'],
-                    'Débito': imp_info['conta'], 'Crédito': '99', 'Imposto': imp_info['nome'],
-                    'Principal': doc['Principal'], 'Multa': doc['Multa'], 'Juros': doc['Juros'],
-                    'IA': '✨' if doc['IA_Usada'] else '', 'Arquivo': doc['Arquivo'], 'Favorecido': doc['Favorecido']
+        # Adicionar Sobras
+        for d in list_pdf:
+            if d['Arq'] not in pdf_usados:
+                i_info = mapa_imp.get(d['Cod'], {'conta': '9999', 'nome': d.get('IA_Imp', 'NÃO IDENTIFICADO')})
+                rows.append({
+                    'Status': '⚠️ SÓ NO PDF', 'Data': d['Data'][0] if d['Data'] else "N/A", 'Valor Total': d['Total'],
+                    'Débito': i_info['conta'], 'Crédito': '99', 'Imposto': i_info['nome'],
+                    'Histórico': 'PDF SEM LANÇAMENTO NO EXCEL', 'Principal': d['Principal'], 'Multa': d['Multa'], 'Juros': d['Juros'],
+                    'Favorecido': d['Fav'], 'IA': '✨' if d['IA'] else '', 'Arquivo': d['Arq']
                 })
 
-        res_df = pd.DataFrame(final_rows).fillna(0)
+        res_df = pd.DataFrame(rows)
         
-        # DASHBOARD DE INDICADORES
+        # Dashboard
         k1, k2, k3, k4 = st.columns(4)
         conc = len(res_df[res_df['Status'] == '✅ CONCILIADO'])
         falta = len(res_df[res_df['Status'] == '❌ FALTA PDF'])
         sobra = len(res_df[res_df['Status'] == '⚠️ SÓ NO PDF'])
-        total_v = res_df['Valor Total'].sum()
-
-        k1.metric("✅ Conciliados", conc)
-        k2.metric("❌ Pendentes (Excel)", falta, delta_color="inverse")
-        k3.metric("⚠️ Pendentes (PDF)", sobra)
-        k4.metric("💰 Total Processado", formatar_moeda(total_v))
-
-        # ÁREA DE RESULTADOS COM FILTRO
-        st.divider()
-        col_header1, col_header2 = st.columns([2, 1])
-        with col_header1:
-            st.subheader("📋 Detalhamento da Conciliação")
-        with col_header2:
-            filtro = st.multiselect("Filtrar por Status:", res_df['Status'].unique(), default=res_df['Status'].unique())
         
-        # Aplicar Filtro
-        df_filtrado = res_df[res_df['Status'].isin(filtro)]
+        k1.metric("Conciliados", conc)
+        k2.metric("Pendentes (Excel)", falta, delta_color="inverse")
+        k3.metric("Pendentes (PDF)", sobra)
+        k4.metric("Total Processado", formatar_moeda(res_df['Valor Total'].sum()))
 
-        # Estilização Horizontal
+        st.divider()
+        c_h1, c_h2 = st.columns([2, 1])
+        with c_h1: st.subheader("📋 Resultados Detalhados")
+        with c_h2: filtro = st.multiselect("Filtrar por Status:", res_df['Status'].unique(), default=res_df['Status'].unique())
+        
+        df_f = res_df[res_df['Status'].isin(filtro)]
+
+        # Formatação Visual da Tabela
         def style_rows(row):
             if row['Status'] == '✅ CONCILIADO': return ['background-color: rgba(46, 204, 113, 0.1)'] * len(row)
             if row['Status'] == '❌ FALTA PDF': return ['background-color: rgba(231, 76, 60, 0.1)'] * len(row)
             return ['background-color: rgba(241, 196, 15, 0.1)'] * len(row)
 
-        # Formatação de exibição
-        df_display = df_filtrado.copy()
+        disp = df_f.copy()
         for col in ['Valor Total', 'Principal', 'Multa', 'Juros']:
-            df_display[col] = df_display[col].apply(formatar_moeda)
+            disp[col] = disp[col].apply(formatar_moeda)
 
-        # Tabela Principal
-        st.dataframe(df_display.style.apply(style_rows, axis=1), use_container_width=True)
+        st.dataframe(disp.style.apply(style_rows, axis=1), use_container_width=True)
 
         # Exportação
-        st.divider()
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            res_df.to_excel(writer, index=False)
-        
-        st.download_button(
-            label="📥 Exportar Lançamentos Finais (.xlsx)", 
-            data=output.getvalue(), 
-            file_name="conciliacao_finalizada.xlsx",
-            help="Clique para baixar o relatório completo pronto para o sistema Domínio."
-        )
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
+        st.download_button("📥 Baixar Excel Completo", out.getvalue(), "conciliacao_contabil.xlsx")
     else:
-        st.error("❌ Erro: Não foi possível identificar os dados no Excel. Verifique se as colunas de Data e Valor existem.")
+        st.error("❌ Erro ao ler Excel. Verifique o cabeçalho.")
 else:
-    st.info("💡 Bem-vindo! Comece enviando o relatório do Domínio e os PDFs dos comprovantes para análise.")
+    st.info("💡 Arraste o Excel do Domínio e os PDFs dos comprovantes para começar.")
