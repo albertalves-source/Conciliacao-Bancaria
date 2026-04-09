@@ -69,41 +69,42 @@ def converter_data_dominio(data_obj):
         return None
 
 def limpar_nome_contabil(nome):
-    """Limpeza extrema e cirúrgica para remover IDs técnicos sem destruir nomes de empresas."""
+    """Limpeza Suprema: Destrói qualquer ID técnico, mantendo apenas o nome puro."""
     if not nome or str(nome).lower() in ["n/a", "nan", "0", "none"]: return ""
     
     n = str(nome).upper()
     
-    # 1. Remove UUIDs explícitos (com hífens)
-    n = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', n)
+    # 1. Remove símbolos de moeda
+    n = n.replace('R$', '').replace('$', '')
     
-    # 2. Remove blocos hexadecimais/alfanuméricos fortes (ex: B4D85B1A, 082269E15B)
-    # Qualquer palavra que contenha letras E números e tenha 5 ou mais caracteres é apagada
-    n = re.sub(r'\b(?=[A-Z]*[0-9])(?=[0-9]*[A-Z])[A-Z0-9]{5,}\b', '', n)
-    
-    # 3. Remove blocos de 4 caracteres que parecem códigos do PIX perdidos (ex: F469, 998D)
-    n = re.sub(r'\b(?=[A-Z]*[0-9])(?=[0-9]*[A-Z])[A-Z0-9]{4}\b', '', n)
-
-    # 4. Remove números longos (CNPJ, CPF, Conta, IDs)
-    n = re.sub(r'\b\d{5,}\b', '', n)
-    n = re.sub(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2}', '', n)
-    
-    # 5. Remove lixo bancário
-    termos_lixo = [
-        "PIX ENVIADO PARA", "PIX RECEBIDO", "TRANSFERÊNCIA ENVIADA PARA", "TRANSFERÊNCIA RECEBIDA",
-        "PAGADOR", "BENEFICIARIO", "RAZAO SOCIAL", "FAVORECIDO", "VALOR PAGO", "DATA DO", "PAGAMENTO",
-        "BOLETO", "PAYMENT", "SALDO DISPONÍVEL", "CONNECTPSP", "DESENVOLVEDORA", "R\$", "DE R\$", 
-        "INSTITUICAO", "AUTENTICACAO", "COMPROVANTE", "OPERATIONS", "LTDA", "S.A.", "S/A", "SA", "ME"
+    # 2. Termos técnicos do banco que vêm antes do nome real
+    termos_bancarios = [
+        "PIX ENVIADO PARA:", "PIX RECEBIDO PAGADOR:", "PIX ENVIADO PARA", "PIX RECEBIDO",
+        "TRANSFERENCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA", 
+        "TRANSFERENCIA RECEBIDA PAGADOR:", "TRANSFERÊNCIA RECEBIDA PAGADOR:", "TRANSFERÊNCIA RECEBIDA",
+        "TED ENVIADA PARA:", "TED ENVIADA PARA", "TED RECEBIDA", 
+        "DEVOLUÇÃO DE PIX ENVIADO (DESFAZIMENTO)", "DEVOLUCAO DE PIX ENVIADO (DESFAZIMENTO)",
+        "DEVOLUÇÃO DE PIX ENVIADO", "DESFAZIMENTO",
+        "PAGADOR:", "BENEFICIARIO:", "RAZAO SOCIAL:", "FAVORECIDO:", "VALOR PAGO", "DATA DO PAGAMENTO", 
+        "PAGAMENTO DE BOLETO", "BOLETO", "PAYMENT", "SALDO DISPONÍVEL", "SALDO DISPONIVEL", "COMPROVANTE FISCAL", "COMPROVANTE"
     ]
-    for t in termos_lixo:
-        n = re.sub(r'\b' + t + r'\b', '', n)
+    for t in termos_bancarios:
+        n = n.replace(t, '')
+        
+    # 3. Remove pontuações que grudam IDs (pontos, hífens, barras, vírgulas)
+    n = re.sub(r'[\.\-\/\,]', '', n)
     
-    # 6. Limpeza final
-    n = re.sub(r'[:\-,\(\)_]', ' ', n)
+    # 4. REGRA DE OURO: Remove QUALQUER palavra que contenha NÚMEROS.
+    # Isso destrói instantaneamente CPFs, contas bancárias e IDs hexadecimais do PIX (ex: F469, B4D85B1A)
+    n = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', n)
     
-    # Retorna apenas o que sobrou
-    palavras = [w for w in n.split() if len(w) > 2]
-    return ' '.join(palavras).strip()
+    # 5. Remove espaços extras e caracteres residuais
+    n = re.sub(r'[:\(\)_]', ' ', n)
+    
+    palavras = [w for w in n.split() if len(w) > 1] # Remove letras isoladas
+    resultado = ' '.join(palavras).strip()
+    
+    return resultado if resultado else "EXTRATO BANCARIO"
 
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
     transacoes = []
@@ -124,8 +125,8 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                     if not texto_pagina: continue
                     for linha in texto_pagina.split('\n'):
                         
-                        # Filtro Anti-Lixo: Pula linhas de Saldo, Totais ou Acumuladores
-                        if any(x in linha.upper() for x in ["SALDO", "RESUMO", "DISPONÍVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
+                        # Filtro Anti-Lixo: Pula explicitamente linhas de Saldo e Acumuladores
+                        if any(x in linha.upper() for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
                         valor_match = re.findall(r'(\d[\d\.]*,\d{2})', linha)
@@ -146,7 +147,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                                     nome_limpo = limpar_nome_contabil(desc_bruta)
                                     transacoes.append({
                                         'Data': [data_match.group(1)], 'Total': val,
-                                        'Cod': cod_found, 'Fav': nome_limpo if nome_limpo else "EXTRATO BANCARIO", 
+                                        'Cod': cod_found, 'Fav': nome_limpo, 
                                         'Banc': banco_base, 'IA': False, 'Arq': file.name,
                                         'Principal': val, 'Multa': 0.0, 'Juros': 0.0
                                     })
@@ -172,8 +173,8 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}, 'DELFINANCE': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V19.0")
-st.markdown("Filtro Extremo: Bloqueio de IDs hexadecimais e forçagem de mapeamento.")
+st.title("🏦 Conciliador Contábil IA V20.0")
+st.markdown("Filtro Supremo: Bloqueio absoluto de IDs de transação e saldos bancários.")
 
 with st.sidebar:
     st.header("⚙️ Parâmetros")
@@ -269,4 +270,4 @@ if excel_file and receipt_files:
     
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
-    st.download_button("📥 Baixar Excel Industrial", out.getvalue(), "conciliacao_industrial.xlsx")
+    st.download_button("📥 Baixar Excel Supremo", out.getvalue(), "conciliacao_suprema.xlsx")
