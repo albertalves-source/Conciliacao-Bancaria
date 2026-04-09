@@ -167,11 +167,11 @@ with st.sidebar:
             c = st.text_input(f"{info['n']} ({cod})", info['c'], key=f"i_{cod}")
             mapa_imp[cod] = {'conta': c, 'nome': info['n']}
     
-    mapa_banc = {}
+    mapa_bancos = {}
     with st.expander("Contas de Bancos"):
         for k, v in DEFAULTS_BANCOS.items():
             r = st.text_input(f"Cod. {v['n']}", v['r'], key=f"b_{k}")
-            mapa_banc[k] = {'reduzido': r, 'nome': v['n']}
+            mapa_bancos[k] = {'reduzido': r, 'nome': v['n']}
 
 # ÁREA DE UPLOAD
 u1, u2 = st.columns(2)
@@ -208,12 +208,12 @@ if ex_file and pdf_files:
             for d in list_pdf:
                 if abs(v_ex - d['Total']) < 0.01 and d_ex in d['Data']:
                     i_info = mapa_imp.get(d['Cod'], {'conta': '9999', 'nome': d.get('IA_Imp', 'FORNECEDOR/OUTROS')})
-                    b_info = mapa_banc.get(d['Banc'], {'nome': 'BANCO', 'reduzido': '99'})
+                    b_info = mapa_bancos.get(d['Banc'], {'nome': 'BANCO', 'reduzido': '99'})
                     
                     rows.append({
                         'Status': '✅ CONCILIADO', 
                         'Data': d_ex, 
-                        'Valor Total': v_dom if 'v_dom' in locals() else v_ex,
+                        'Valor Total': v_ex,
                         'Imposto': i_info['nome'],
                         'Favorecido': d['Fav'] if d['Fav'] else limpar_nome_contabil(linha.get('Cliente', '')),
                         'Débito': i_info['conta'], 
