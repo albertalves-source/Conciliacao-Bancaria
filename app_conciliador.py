@@ -106,7 +106,7 @@ def limpar_nome_contabil(nome):
     if not resultado or resultado in ["DE", "DA", "DO", "PARA", "EM"]: return ""
     return resultado
 
-def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
+def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, modo_conciliacao):
     transacoes = []
     banco_base = ""
     for b_key in mapa_bancos.keys():
@@ -125,8 +125,18 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                     if not texto_pagina: continue
                     for linha in texto_pagina.split('\n'):
                         
-                        # Filtro Anti-Lixo Mestre: Pula linhas personalizadas pelo utilizador (CONNECTPSP, SALDO, etc)
                         linha_upper = linha.upper()
+                        
+                        # Filtro Anti-Lixo Mestre: Pula linhas claras de Saldo
+                        if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
+                        
+                        # FILTRO DE NATUREZA: Diferencia Entradas (Verde) de Saídas (Vermelho)
+                        is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO"])
+                        
+                        if "Pagar" in modo_conciliacao and is_credito: continue # Ignora números verdes (entradas)
+                        if "Receber" in modo_conciliacao and not is_credito: continue # Ignora números vermelhos (saídas)
+                        
+                        # Filtro Personalizado do Utilizador
                         if any(t in linha_upper for t in termos_ignorar if t): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
@@ -155,9 +165,15 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                                         'Banc': banco_base, 'IA': False, 'Arq': file.name,
                                         'Principal': val, 'Multa': 0.0, 'Juros': 0.0
                                     })
-                # Fallback para comprovantes simples
+                # Fallback para comprovantes simples (Ex: DARF)
                 if not transacoes:
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
+                    texto_upper = texto_completo.upper()
+                    
+                    is_credito_doc = any(x in texto_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO"])
+                    if "Pagar" in modo_conciliacao and is_credito_doc: return []
+                    if "Receber" in modo_conciliacao and not is_credito_doc: return []
+                    
                     rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
                     datas = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto_completo)))
                     valores = re.findall(r'(\d[\d\.]*,\d{2})', texto_completo)
@@ -177,20 +193,27 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}, 'DELFINANCE': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V22.0")
-st.markdown("Filtro Personalizado: Elimine taxas de gateway e lixo do extrato com facilidade.")
+st.title("🏦 Conciliador Contábil IA V23.0")
+st.markdown("Filtro Direcional: Separação automática de Débitos (Vermelho) e Créditos (Verde).")
 
 with st.sidebar:
+    st.header("🎯 Natureza da Conciliação")
+    modo_conciliacao = st.radio(
+        "O que estamos a conciliar?", 
+        ["Contas a Pagar (Apenas Débitos/Vermelho)", 
+         "Contas a Receber (Apenas Créditos/Verde)", 
+         "Ambos (Extrato Completo)"],
+        index=0
+    )
+    
+    st.divider()
     st.header("⚙️ Parâmetros")
     tolerancia_dias = st.slider("Tolerância de Datas (dias):", 0, 10, 3)
     
     st.divider()
     st.header("🚫 Filtro de Extrato")
-    st.markdown("<small>As linhas com estes termos serão totalmente ignoradas:</small>", unsafe_allow_html=True)
-    ignorar_txt = st.text_area(
-        "", 
-        "CONNECTPSP, SALDO, RESUMO, DISPONÍVEL, DISPONIVEL, TOTAL ACUMULADOR, SALDO EM"
-    )
+    st.markdown("<small>Ignorar linhas que contenham as palavras:</small>", unsafe_allow_html=True)
+    ignorar_txt = st.text_area("", "CONNECTPSP, SALDO, RESUMO")
     termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
     
     st.divider()
@@ -224,7 +247,7 @@ if excel_file and receipt_files:
     todas_transacoes_pdf = []
     for f in receipt_files:
         with st.spinner(f"Lendo {f.name}..."):
-            todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar))
+            todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar, modo_conciliacao))
 
     rows, ids_pdf_usados = [], set()
     for idx, l in df_dom.iterrows():
