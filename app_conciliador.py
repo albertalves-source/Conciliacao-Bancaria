@@ -200,7 +200,7 @@ with st.sidebar:
 
 c1, c2 = st.columns(2)
 with c1: excel_file = st.file_uploader("📂 Relatório Domínio", type=["xlsx", "xls", "csv"])
-with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos", type=["pdf", "png", "jpg", "xlsx", "xls", "csv], accept_multiple_files=True)
+with c2: receipt_files = st.file_uploader("📄 PDFs/Extratos", type=["pdf", "png", "jpg", "xlsx", "xls", "csv"], accept_multiple_files=True)
 
 if excel_file and receipt_files:
     try:
