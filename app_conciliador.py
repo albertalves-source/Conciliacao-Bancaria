@@ -81,11 +81,11 @@ def limpar_nome_contabil(nome):
     # Protege palavras que são apenas letras (como INTERNATIONAL ou SELECT)
     n = re.sub(r'\b(?=[A-Z]*[0-9])(?=[0-9]*[A-Z])[A-Z0-9]+\b', '', n)
     
-    # 3. Remove números longos (IDs bancários, CPFs sem máscara, códigos de transação)
-    n = re.sub(r'\d{7,}', '', n)
+    # 3. Remove números longos isolados (IDs bancários, códigos de barras)
+    n = re.sub(r'\b\d{6,}\b', '', n)
     n = re.sub(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2}', '', n)
     
-    # 4. Termos de sistema bancário que poluem o favorecido
+    # 4. Termos técnicos de extratos bancários
     termos_lixo = [
         "PIX ENVIADO PARA", "PIX RECEBIDO", "TRANSFERÊNCIA ENVIADA PARA", "TRANSFERÊNCIA RECEBIDA",
         "PAGADOR", "BENEFICIARIO", "RAZAO SOCIAL", "FAVORECIDO", "VALOR PAGO", "DATA DO", "PAGAMENTO",
@@ -95,17 +95,15 @@ def limpar_nome_contabil(nome):
     for t in termos_lixo:
         n = re.sub(r'\b' + t + r'\b', '', n)
     
-    # 5. Remove caracteres residuais
+    # 5. Limpeza final de pontuação
     n = re.sub(r'[:\-,\(\)_]', ' ', n)
     
-    # Retorna o nome limpo e com espaços corrigidos (apenas palavras com mais de 2 letras)
+    # Retorna apenas o que sobrou com mais de 2 letras
     palavras = [w for w in n.split() if len(w) > 2]
     return ' '.join(palavras).strip()
 
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
     transacoes = []
-    
-    # Detecta banco pelo nome do arquivo
     banco_base = ""
     for b_key in mapa_bancos.keys():
         if b_key in file.name.upper(): banco_base = b_key; break
@@ -122,8 +120,8 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                     texto_pagina = page.extract_text()
                     if not texto_pagina: continue
                     for linha in texto_pagina.split('\n'):
-                        # Pula linhas de saldo
-                        if any(x in linha.upper() for x in ["SALDO", "RESUMO", "DISPONÍVEL"]): continue
+                        # Filtro crucial: Ignora linhas de saldo e cabeçalho do extrato
+                        if any(x in linha.upper() for x in ["SALDO", "RESUMO", "DISPONÍVEL", "VALOR TOTAL"]): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
                         valor_match = re.findall(r'(\d[\d\.]*,\d{2})', linha)
@@ -132,12 +130,11 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                             desc_bruta = linha.replace(data_match.group(1), "")
                             for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
                             
-                            # Cód. Receita: Só captura se disser DARF ou se o código estiver no plano
+                            # Cód. Receita: Só captura se for explicitamente um imposto do plano
                             cod_found = ""
-                            if any(x in linha.upper() for x in ["DARF", "RECEITA", "CODIGO"]):
-                                codes = re.findall(r'\b(\d{4})\b', linha)
-                                for c in codes:
-                                    if c in mapa_imp: cod_found = c; break
+                            codes = re.findall(r'\b(\d{4})\b', linha)
+                            for c in codes:
+                                if c in mapa_imp: cod_found = c; break
                             
                             for v_txt in valor_match:
                                 val = limpar_valor(v_txt)
@@ -148,8 +145,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                                         'Banc': banco_base, 'IA': False, 'Arq': file.name,
                                         'Principal': val, 'Multa': 0.0, 'Juros': 0.0
                                     })
-                
-                # Fallback para comprovantes isolados
+                # Fallback para comprovantes simples
                 if not transacoes:
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
                     rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
@@ -157,13 +153,10 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia):
                     valores = re.findall(r'(\d[\d\.]*,\d{2})', texto_completo)
                     if datas and valores:
                         v_f = limpar_valor(valores[-1])
-                        prin, mul, jur = v_f, 0.0, 0.0
-                        if len(valores) >= 4:
-                            prin, mul, jur = limpar_valor(valores[-4]), limpar_valor(valores[-3]), limpar_valor(valores[-2])
                         transacoes.append({
                             'Data': datas, 'Total': v_f, 'Cod': rec.group(1) if rec else "",
                             'Banc': banco_base, 'Fav': "COMPROVANTE",
-                            'IA': False, 'Arq': file.name, 'Principal': prin, 'Multa': mul, 'Juros': jur
+                            'IA': False, 'Arq': file.name, 'Principal': v_f, 'Multa': 0.0, 'Juros': 0.0
                         })
         except: pass
         
@@ -174,11 +167,11 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V17.0")
-st.markdown("Filtro Anti-Sujeira: Prioridade ao Nome do Excel e Limpeza Industrial de IDs Delfinance.")
+st.title("🏦 Conciliador Contábil IA V18.0")
+st.markdown("Filtro Industrial de IDs: O robô agora prioriza os nomes que você digitou no Excel.")
 
 with st.sidebar:
-    st.header("⚙️ Configurações")
+    st.header("⚙️ Parâmetros")
     tolerancia_dias = st.slider("Tolerância de Datas (dias):", 0, 10, 3)
     st.divider()
     st.header("📋 Plano de Contas")
@@ -202,7 +195,7 @@ if excel_file and receipt_files:
 
     todas_transacoes_pdf = []
     for f in receipt_files:
-        with st.spinner(f"Processando {f.name}..."):
+        with st.spinner(f"Lendo {f.name}..."):
             todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True))
 
     rows, ids_pdf_usados = [], set()
@@ -218,24 +211,23 @@ if excel_file and receipt_files:
                 try:
                     d_pdf_obj = datetime.strptime(d_pdf_str, '%d/%m/%Y').date()
                     if abs(v_ex - doc['Total']) < 0.05 and abs((d_ex_obj - d_pdf_obj).days) <= tolerancia_dias:
-                        regra = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
+                        regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
                         b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': 'BANCO', 'reduzido': '99'})
                         
-                        # MASTER FIX: Se conciliou, o nome do Favorecido vem obrigatoriamente do EXCEL
+                        # MASTER FIX: Se conciliou, o nome do Favorecido DEVE vir do EXCEL (o oficial)
                         fav_final = str(l.get(c_cli, '')).upper()
                         if fav_final == "NAN" or not fav_final: fav_final = doc['Fav']
 
                         rows.append({
                             'Status': '✅ CONCILIADO', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Valor Total': v_ex,
-                            'Imposto': regra['nome'], 'Favorecido': fav_final, 'Data PDF': d_pdf_obj.strftime('%d/%m/%Y'),
-                            'Banco': b_inf['nome'], 'Débito': regra['conta'], 'Crédito': b_inf['reduzido'], 
+                            'Imposto': regra_imp['nome'], 'Favorecido': fav_final, 'Data PDF': d_pdf_obj.strftime('%d/%m/%Y'),
+                            'Banco': b_inf['nome'], 'Débito': regra_imp['conta'], 'Crédito': b_inf['reduzido'], 
                             'Principal': doc.get('Principal', v_ex), 'Multa': doc.get('Multa', 0.0), 'Juros': doc.get('Juros', 0.0),
                             'Cód. Receita': doc['Cod'], 'Arquivo': doc['Arq']
                         })
                         ids_pdf_usados.add(i); match_found = True; break
                 except: continue
             if match_found: break
-        
         if not match_found:
             rows.append({'Status': '❌ FALTA PDF', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Valor Total': v_ex, 'Favorecido': str(l.get(c_cli, '')).upper()})
 
