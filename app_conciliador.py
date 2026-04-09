@@ -173,7 +173,7 @@ DEFAULTS_IMPOSTOS = {'0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, '2172': {'
 DEFAULTS_BANCOS = {'ITAU': {'n': 'Itaú', 'r': '10'}, 'BRAD': {'n': 'Bradesco', 'r': '20'}, 'SANTANDER': {'n': 'Santander', 'r': '30'}, 'BRASIL': {'n': 'B. Brasil', 'r': '01'}, 'DELFIN': {'n': 'Delfinance', 'r': '99'}, 'DELFINANCE': {'n': 'Delfinance', 'r': '99'}}
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V20.0")
+st.title("🏦 Conciliador Contábil IA V20.1")
 st.markdown("Filtro Supremo: Bloqueio absoluto de IDs de transação e saldos bancários.")
 
 with st.sidebar:
@@ -181,8 +181,10 @@ with st.sidebar:
     tolerancia_dias = st.slider("Tolerância de Datas (dias):", 0, 10, 3)
     st.divider()
     st.header("📋 Plano de Contas")
-    mapa_imp = {cod: {'conta': st.text_input(f"{info['n']}", info['c']), 'nome': info['n']} for cod, info in DEFAULTS_IMPOSTOS.items()}
-    mapa_bancos = {k: {'reduzido': st.text_input(f"Cod. {v['n']}", v['r']), 'nome': v['n']} for k, v in DEFAULTS_BANCOS.items()}
+    
+    # CORREÇÃO CRÍTICA: Adicionado o parâmetro 'key' único para cada input de imposto e banco
+    mapa_imp = {cod: {'conta': st.text_input(f"{info['n']} ({cod})", info['c'], key=f"imp_{cod}"), 'nome': info['n']} for cod, info in DEFAULTS_IMPOSTOS.items()}
+    mapa_bancos = {k: {'reduzido': st.text_input(f"Cod. {v['n']} ({k})", v['r'], key=f"banco_{k}"), 'nome': v['n']} for k, v in DEFAULTS_BANCOS.items()}
 
 c1, c2 = st.columns(2)
 with c1: excel_file = st.file_uploader("📂 Relatório Domínio", type=["xlsx", "xls", "csv"])
