@@ -71,12 +71,9 @@ def converter_data_dominio(data_obj):
 def limpar_nome_contabil(nome):
     """Limpeza Suprema: Destrói qualquer ID técnico e limpa fantasmas."""
     if not nome or str(nome).lower() in ["n/a", "nan", "0", "none"]: return ""
-    
     n = str(nome).upper()
-    
     n = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', n)
     n = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', n) 
-    
     n = n.replace('R$', '').replace('$', '').replace('DE R', '')
     
     termos_bancarios = [
@@ -93,7 +90,6 @@ def limpar_nome_contabil(nome):
         n = n.replace(t, '')
         
     n = re.sub(r'[\.\-\/\,:\(\)_]', ' ', n)
-    
     palavras = [w for w in n.split() if len(w) > 1]
     resultado = ' '.join(palavras).strip()
     
@@ -118,7 +114,6 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                     texto_pagina = page.extract_text()
                     if not texto_pagina: continue
                     for linha in texto_pagina.split('\n'):
-                        
                         linha_upper = linha.upper()
                         
                         if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
@@ -154,7 +149,6 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                                         'Banc': banco_base, 'IA': False, 'Arq': file.name,
                                         'Principal': val, 'Multa': 0.0, 'Juros': 0.0
                                     })
-                
                 if not transacoes:
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
                     texto_upper = texto_completo.upper()
@@ -174,49 +168,44 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                             'IA': False, 'Arq': file.name, 'Principal': v_f, 'Multa': 0.0, 'Juros': 0.0
                         })
         except: pass
-        
     return transacoes
 
 # ==========================================
-# 🧠 BANCO DE DADOS MULTI-EMPRESAS
+# 🧠 BANCO DE DADOS INTEGRADO (TODAS AS EMPRESAS)
 # ==========================================
 BANCO_DE_DADOS_EMPRESAS = {
     "SELECT OPERATIONS S.A.": {
         "impostos": {
-            '0561': {'n': 'IRRF s/ Salários', 'c': '2105'}, 
-            '2172': {'n': 'COFINS Faturamento', 'c': '2108'}, 
-            '8109': {'n': 'PIS Faturamento', 'c': '2110'}
+            '0561': {'n': 'IRRF', 'c': '2105'}, 
+            '2172': {'n': 'COFINS', 'c': '2108'}, 
+            '8109': {'n': 'PIS', 'c': '2110'}
         },
         "bancos": {
-            'ITAU': {'n': 'Itaú', 'r': '10'}, 
-            'BRAD': {'n': 'Bradesco', 'r': '20'}, 
-            'SANTANDER': {'n': 'Santander', 'r': '30'}, 
-            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'},
+            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'}, 
             'PAYBROKERS': {'n': 'Gatway Paybrokers', 'r': '9'},
             'DELFIN': {'n': 'Delfinance MMABET', 'r': '1107'}, 
             'DELFINANCE': {'n': 'Delfinance MMABET', 'r': '1107'},
             'PAPIGAMES': {'n': 'Delfinance Papigames', 'r': '1119'}
         },
         "fornecedores": {
-            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '2050',
-            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '2051',
-            'BUZZCRAFT DIGITAL LTDA': '2052',
-            'AM PUBLICIDADE E PROMOCAO DE VENDAS LTDA': '2053',
-            'UNIFICAPAY SERVICOS FINANCEIROS E DE PAGAMENTOS LTDA': '2054',
-            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '2055',
-            'DUCAMPELO PARTICIPACOES LTDA': '2056'
+            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '474',
+            'DIEGO HENRIQUE SANTOS DE SANTANA': '47',
+            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '383',
+            '60.692.475 SIDNEY ALVES CORREIA JUNIOR': '490',
+            '65.227.051 LUIZ HENRIQUE DOS SANTOS GONZAGA': '494',
+            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '425',
+            'DUCAMPELO PARTICIPACOES LTDA': '476',
+            '64.438.924 GABRIELLA BORGES ROCHA': '477'
         }
     },
     "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
         "impostos": {
             '0561': {'n': 'IRRF s/ Salários', 'c': '9999'}, 
-            '2172': {'n': 'COFINS Faturamento', 'c': '428'}, 
-            '8109': {'n': 'PIS Faturamento', 'c': '429'}
+            '2172': {'n': 'COFINS', 'c': '428'}, 
+            '8109': {'n': 'PIS', 'c': '429'},
+            'ISS': {'n': 'ISS', 'c': '427'}
         },
         "bancos": {
-            'ITAU': {'n': 'Itaú', 'r': '9999'}, 
-            'BRAD': {'n': 'Bradesco', 'r': '9999'}, 
-            'SANTANDER': {'n': 'Santander', 'r': '9999'}, 
             'BRASIL': {'n': 'Banco do Brasil', 'r': '8'},
             'FOXBIT': {'n': 'Foxbit Invest Custódia', 'r': '1618'},
             'PAGCORP': {'n': 'Cartões Pagcorp Flabet', 'r': '1845'},
@@ -227,16 +216,14 @@ BANCO_DE_DADOS_EMPRESAS = {
     "JBD COMUNICACAO E TECNOLOGIA LTDA": {
         "impostos": {
             '0561': {'n': 'IRRF s/ Salários', 'c': '9999'}, 
-            '2172': {'n': 'COFINS Faturamento', 'c': '9999'}, 
-            '8109': {'n': 'PIS Faturamento', 'c': '9999'}
+            '2172': {'n': 'COFINS', 'c': '9999'}, 
+            '8109': {'n': 'PIS', 'c': '9999'}
         },
         "bancos": {
-            'ITAU': {'n': 'Itaú', 'r': '9999'}, 
-            'BRAD': {'n': 'Bradesco', 'r': '9999'}, 
-            'SANTANDER': {'n': 'Santander', 'r': '9999'}, 
             'BRASIL': {'n': 'Banco do Brasil', 'r': '8'},
             'RIOPAG': {'n': 'Gatway Riopag Marjorsports', 'r': '9'},
             'SIMPLES': {'n': 'Conta Simples', 'r': '587'},
+            'CONTA SIMPLES': {'n': 'Conta Simples', 'r': '587'},
             'PAYBROKERS': {'n': 'Paybrokers Major', 'r': '605'}
         },
         "fornecedores": {}
@@ -250,28 +237,24 @@ BANCO_DE_DADOS_EMPRESAS = {
             'ITAU': {'n': 'Itaú', 'r': '99'}, 
             'BRAD': {'n': 'Bradesco', 'r': '99'}, 
             'SANTANDER': {'n': 'Santander', 'r': '99'}, 
-            'BRASIL': {'n': 'B. Brasil', 'r': '99'}, 
-            'DELFIN': {'n': 'Delfinance', 'r': '99'}
+            'BRASIL': {'n': 'B. Brasil', 'r': '99'}
         },
         "fornecedores": {}
     }
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V26.0")
-st.markdown("Plataforma Multi-Empresas: Select Operations, PixBet, JBD e Padrão.")
+st.title("🏦 Conciliador Contábil IA V27.1")
+st.markdown("Integração Total de Contas: Select Operations, PixBet e JBD.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
     empresa_selecionada = st.selectbox(
-        "Qual empresa está a conciliar agora?", 
+        "Selecione a base de dados ativa:", 
         list(BANCO_DE_DADOS_EMPRESAS.keys())
     )
     
     config_atual = BANCO_DE_DADOS_EMPRESAS[empresa_selecionada]
-    mapa_imp = config_atual["impostos"]
-    mapa_bancos = config_atual["bancos"]
-    mapa_fornecedores = config_atual["fornecedores"]
     
     st.divider()
     st.header("🎯 Natureza da Conciliação")
@@ -294,7 +277,23 @@ with st.sidebar:
     termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
     
     st.divider()
-    st.success(f"✅ Códigos carregados para: **{empresa_selecionada}**")
+    st.header("📋 Plano de Contas (Atalhos Rápidos)")
+    
+    # CORREÇÃO CRÍTICA: Os campos de atalho agora leem diretamente a empresa atual!
+    mapa_imp = {}
+    for cod, info in config_atual["impostos"].items():
+        nova_conta = st.text_input(f"{info['n']} ({cod})", info['c'], key=f"imp_{empresa_selecionada}_{cod}")
+        mapa_imp[cod] = {'conta': nova_conta, 'nome': info['n']}
+
+    mapa_bancos = {}
+    for k, v in config_atual["bancos"].items():
+        novo_reduzido = st.text_input(f"Cod. {v['n']} ({k})", v['r'], key=f"banco_{empresa_selecionada}_{k}")
+        mapa_bancos[k] = {'reduzido': novo_reduzido, 'nome': v['n']}
+
+    mapa_fornecedores = config_atual["fornecedores"]
+    
+    st.divider()
+    st.success(f"✅ Códigos atualizados de acordo com os CSVs de **{empresa_selecionada}**")
 
 c1, c2 = st.columns(2)
 with c1: excel_file = st.file_uploader("📂 Relatório Domínio (Excel/CSV)", type=["xlsx", "xls", "csv"])
@@ -392,4 +391,4 @@ if excel_file and receipt_files:
     with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
     
     nome_arquivo = f"conciliacao_{empresa_selecionada.split()[0].lower()}.xlsx"
-    st.download_button("📥 Baixar Excel Multi-Empresas", out.getvalue(), nome_arquivo)
+    st.download_button("📥 Baixar Excel Processado", out.getvalue(), nome_arquivo)
