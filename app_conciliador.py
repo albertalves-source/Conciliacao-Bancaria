@@ -74,14 +74,11 @@ def limpar_nome_contabil(nome):
     
     n = str(nome).upper()
     
-    # 1. Remove REGEX pesados (CPFs, UUIDs, Alfanuméricos do PIX)
     n = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', n)
-    n = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', n) # Destrói qualquer palavra que tenha número no meio
+    n = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', n) 
     
-    # 2. Remove "R$" e variações que causam linhas fantasmas
     n = n.replace('R$', '').replace('$', '').replace('DE R', '')
     
-    # 3. Termos técnicos de extrato
     termos_bancarios = [
         "PIX ENVIADO PARA:", "PIX RECEBIDO PAGADOR:", "PIX ENVIADO PARA", "PIX RECEBIDO",
         "TRANSFERENCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA", 
@@ -95,10 +92,8 @@ def limpar_nome_contabil(nome):
     for t in termos_bancarios:
         n = n.replace(t, '')
         
-    # 4. Limpa pontuação residual
     n = re.sub(r'[\.\-\/\,:\(\)_]', ' ', n)
     
-    # 5. Remove palavras vazias ou sobras minúsculas
     palavras = [w for w in n.split() if len(w) > 1]
     resultado = ' '.join(palavras).strip()
     
@@ -126,16 +121,13 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                         
                         linha_upper = linha.upper()
                         
-                        # Filtro Anti-Lixo Mestre
                         if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
-                        # FILTRO DE NATUREZA: Diferencia Entradas (Verde) de Saídas (Vermelho)
                         is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO"])
                         
                         if "Pagar" in modo_conciliacao and is_credito: continue 
                         if "Receber" in modo_conciliacao and not is_credito: continue 
                         
-                        # Filtro Personalizado do Utilizador
                         if any(t in linha_upper for t in termos_ignorar if t): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
@@ -187,7 +179,6 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
 
 # ==========================================
 # 🧠 BANCO DE DADOS MULTI-EMPRESAS
-# Albert, pode adicionar quantas empresas quiser aqui abaixo!
 # ==========================================
 BANCO_DE_DADOS_EMPRESAS = {
     "SELECT OPERATIONS S.A.": {
@@ -200,9 +191,11 @@ BANCO_DE_DADOS_EMPRESAS = {
             'ITAU': {'n': 'Itaú', 'r': '10'}, 
             'BRAD': {'n': 'Bradesco', 'r': '20'}, 
             'SANTANDER': {'n': 'Santander', 'r': '30'}, 
-            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'}, 
+            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'},
+            'PAYBROKERS': {'n': 'Gatway Paybrokers', 'r': '9'},
             'DELFIN': {'n': 'Delfinance MMABET', 'r': '1107'}, 
-            'DELFINANCE': {'n': 'Delfinance MMABET', 'r': '1107'}
+            'DELFINANCE': {'n': 'Delfinance MMABET', 'r': '1107'},
+            'PAPIGAMES': {'n': 'Delfinance Papigames', 'r': '1119'}
         },
         "fornecedores": {
             'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '2050',
@@ -212,8 +205,41 @@ BANCO_DE_DADOS_EMPRESAS = {
             'UNIFICAPAY SERVICOS FINANCEIROS E DE PAGAMENTOS LTDA': '2054',
             'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '2055',
             'DUCAMPELO PARTICIPACOES LTDA': '2056'
-            # Adicione mais fornecedores da Select Operations aqui...
         }
+    },
+    "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
+        "impostos": {
+            '0561': {'n': 'IRRF s/ Salários', 'c': '9999'}, 
+            '2172': {'n': 'COFINS Faturamento', 'c': '428'}, 
+            '8109': {'n': 'PIS Faturamento', 'c': '429'}
+        },
+        "bancos": {
+            'ITAU': {'n': 'Itaú', 'r': '9999'}, 
+            'BRAD': {'n': 'Bradesco', 'r': '9999'}, 
+            'SANTANDER': {'n': 'Santander', 'r': '9999'}, 
+            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'},
+            'FOXBIT': {'n': 'Foxbit Invest Custódia', 'r': '1618'},
+            'PAGCORP': {'n': 'Cartões Pagcorp Flabet', 'r': '1845'},
+            'ZERO': {'n': 'Banco Zero Bet da Sorte', 'r': '1857'}
+        },
+        "fornecedores": {}
+    },
+    "JBD COMUNICACAO E TECNOLOGIA LTDA": {
+        "impostos": {
+            '0561': {'n': 'IRRF s/ Salários', 'c': '9999'}, 
+            '2172': {'n': 'COFINS Faturamento', 'c': '9999'}, 
+            '8109': {'n': 'PIS Faturamento', 'c': '9999'}
+        },
+        "bancos": {
+            'ITAU': {'n': 'Itaú', 'r': '9999'}, 
+            'BRAD': {'n': 'Bradesco', 'r': '9999'}, 
+            'SANTANDER': {'n': 'Santander', 'r': '9999'}, 
+            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'},
+            'RIOPAG': {'n': 'Gatway Riopag Marjorsports', 'r': '9'},
+            'SIMPLES': {'n': 'Conta Simples', 'r': '587'},
+            'PAYBROKERS': {'n': 'Paybrokers Major', 'r': '605'}
+        },
+        "fornecedores": {}
     },
     "EMPRESA PADRÃO (Genérica)": {
         "impostos": {
@@ -227,14 +253,13 @@ BANCO_DE_DADOS_EMPRESAS = {
             'BRASIL': {'n': 'B. Brasil', 'r': '99'}, 
             'DELFIN': {'n': 'Delfinance', 'r': '99'}
         },
-        "fornecedores": {} # Vazio, usará sempre 9999
+        "fornecedores": {}
     }
-    # Para adicionar a "EMPRESA B", basta copiar o bloco acima e colar aqui com os novos códigos!
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V24.0")
-st.markdown("Plataforma Multi-Empresas: Códigos contábeis adaptam-se automaticamente à empresa selecionada.")
+st.title("🏦 Conciliador Contábil IA V26.0")
+st.markdown("Plataforma Multi-Empresas: Select Operations, PixBet, JBD e Padrão.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -243,7 +268,6 @@ with st.sidebar:
         list(BANCO_DE_DADOS_EMPRESAS.keys())
     )
     
-    # Carrega as configurações da empresa escolhida
     config_atual = BANCO_DE_DADOS_EMPRESAS[empresa_selecionada]
     mapa_imp = config_atual["impostos"]
     mapa_bancos = config_atual["bancos"]
@@ -319,12 +343,10 @@ if excel_file and receipt_files:
                         fav_final = str(l.get(c_cli, '')).upper()
                         if fav_final == "NAN" or not fav_final: fav_final = doc['Fav']
                         
-                        # Cérebro Multi-Empresas: Determinar Conta de Débito
                         conta_debito = '9999'
                         if regra_imp['nome'] != '-':
                             conta_debito = regra_imp['conta']
                         else:
-                            # Procura a correspondência no mapa da empresa selecionada
                             if fav_final in mapa_fornecedores:
                                 conta_debito = mapa_fornecedores[fav_final]
                             else:
