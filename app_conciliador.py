@@ -267,6 +267,17 @@ BANCO_DE_DADOS_EMPRESAS = {
             'GATWAY BETVIP': {'n': 'Gatway API BETVIP', 'r': '1085'}
         },
         "fornecedores": {
+            # === FORNECEDORES ORIGINAIS DA SELECT AQUI RESTAURADOS ===
+            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '474',
+            'DIEGO HENRIQUE SANTOS DE SANTANA': '47',
+            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '383',
+            '60.692.475 SIDNEY ALVES CORREIA JUNIOR': '490',
+            '65.227.051 LUIZ HENRIQUE DOS SANTOS GONZAGA': '494',
+            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '425',
+            'DUCAMPELO PARTICIPACOES LTDA': '476',
+            '64.438.924 GABRIELLA BORGES ROCHA': '477',
+            
+            # === RESTANTE DO PLANO DE CONTAS ===
             'FORNECEDORES DIVERSOS': '1126',
             'DECOLA OPERATIONS N.V.': '1083',
             'KAYQUE DA SILVA LOPES': '1402',
@@ -414,7 +425,7 @@ BANCO_DE_DADOS_EMPRESAS = {
             'AYLA PARTICIPAÇÕES': '1570',
             'CODING DESENVOLVIMENTO': '1571',
             'SINGLEBYTE DESENVOLVIMENTO': '1572',
-            'HOTEL LUZEIROS': '1573',
+            'HOT LUZEIROS': '1573',
             'DIGIMAX MARKETING': '1621',
             'FISH PUBLICIDADE': '1622',
             'FORMULA IMPORTAÇÕES': '1623',
@@ -1421,7 +1432,7 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V33.0")
+st.title("🏦 Conciliador Contábil IA V33.1")
 st.markdown("Extratos em Excel e Identificação Automática de Entradas/Saídas (Livre de Filtros Manuais).")
 
 with st.sidebar:
@@ -1535,6 +1546,7 @@ if excel_file and receipt_files:
                         fav_final = str(l.get(c_cli, '')).upper()
                         if fav_final == "NAN" or not fav_final: fav_final = doc['Fav']
                         
+                        fav_final_clean = fav_final.strip()
                         conta_debito = '9999'
                         nome_debito = 'FORNECEDOR DIVERSOS'
                         
@@ -1542,12 +1554,12 @@ if excel_file and receipt_files:
                             conta_debito = regra_imp['conta']
                             nome_debito = regra_imp['nome']
                         else:
-                            if fav_final in mapa_fornecedores:
-                                conta_debito = mapa_fornecedores[fav_final]
-                                nome_debito = fav_final
+                            if fav_final_clean in mapa_fornecedores:
+                                conta_debito = mapa_fornecedores[fav_final_clean]
+                                nome_debito = fav_final_clean
                             else:
                                 for f_nome, f_conta in mapa_fornecedores.items():
-                                    if f_nome in fav_final:
+                                    if f_nome in fav_final_clean or fav_final_clean in f_nome:
                                         conta_debito = f_conta
                                         nome_debito = f_nome
                                         break
@@ -1591,7 +1603,7 @@ if excel_file and receipt_files:
             
             b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
             
-            fav_pdf = doc['Fav']
+            fav_pdf = doc['Fav'].strip()
             conta_debito = '9999'
             nome_debito = 'FORNECEDOR DIVERSOS'
             
@@ -1600,7 +1612,7 @@ if excel_file and receipt_files:
                 nome_debito = fav_pdf
             else:
                 for f_nome, f_conta in mapa_fornecedores.items():
-                    if f_nome in fav_pdf:
+                    if f_nome in fav_pdf or fav_pdf in f_nome:
                         conta_debito = f_conta
                         nome_debito = f_nome
                         break
