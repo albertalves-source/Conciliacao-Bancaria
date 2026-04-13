@@ -940,7 +940,7 @@ BANCO_DE_DADOS_EMPRESAS = {
             "BETTER COLLECTIVE BRASIL LTDA": "1689",
             "MOVEUP MEDIA BRAZIL LTDA": "1662",
             "IVY PRODUCOES ARTISTICAS LTDA": "1663",
-            "SINGLE SOFTWARE SOLUCOES TECNOLOGICAS LTDA": "1666",
+            "SINGLE SOFTWARE SOLUCOES TECNOLOGIAS LTDA": "1666",
             "SINOSSERRA PROMOTORA DE VENDAS E SERVICOS FINANCEIROS LTDA": "1690",
             "BCMV COMUNICACAO E MARKETING LTDA": "1691",
             "AILTON RICARDO MOREIRA GALDINO ME": "1692",
@@ -1268,210 +1268,6 @@ BANCO_DE_DADOS_EMPRESAS = {
             "NAIP INSTITUICAO DE PAGAMENTO SA": "2040"
         }
     },
-     "JBD COMUNICACAO E TECNOLOGIA LTDA": {
-        "impostos": {
-            '0561': {'n': 'IRRF A RECOLHER', 'c': '178'}, 
-            '2172': {'n': 'COFINS A RECOLHER', 'c': '180'}, 
-            '8109': {'n': 'PIS A RECOLHER', 'c': '179'},
-            'ISS': {'n': 'ISS A RECOLHER', 'c': '173'},
-            'INSS': {'n': 'INSS A RECOLHER', 'c': '191'}
-        },
-        "bancos": {
-            'BRASIL': {'n': 'Banco do Brasil', 'r': '8'},
-            'RIOPAG MARJOR': {'n': 'Gatway Riopag - Marjorsports', 'r': '9'},
-            'SIMPLES': {'n': 'Conta Simples', 'r': '587'},
-            'CONTA SIMPLES': {'n': 'Conta Simples', 'r': '587'},
-            'PAYBROKERS MAJOR': {'n': 'Paybrokers - Major', 'r': '605'},
-            'PAYBROKERS PLAYBONDS': {'n': 'Paybrokers - Playbonds', 'r': '694'},
-            'RIOPAG PLAYBONDS': {'n': 'Gatway Riopag - Playbonds', 'r': '641'},
-            'RIOPAG CHEGOUBET': {'n': 'Gatway Riopag - Chegoubet', 'r': '640'},
-            'TERRA': {'n': 'Banco Terra', 'r': '706'},
-            'PAGSTAR': {'n': 'Pagstar', 'r': '842'}
-        },
-        "fornecedores": {
-            "FORNECEDOR DO ESTADO DA PB": "506",
-            "FORNECEDOR PARA NOTAS CANCELADAS": "505",
-            "ANDERSON DA SILVA VALENTIM": "585",
-            "JONAS GABRIEL MUNIZ DE SOUSA": "586",
-            "NUTRICARNES C. V. E A. DE CARNES, FRANGO E FRIOS LTDA": "588",
-            "MAGAZINE LUIZA S/A": "590",
-            "DITONGO CONFECCOES LTDA": "591",
-            "ZEINA RASSI SOCIEDADE INDIVIDUAL DE ADVOCACIA": "611",
-            "RASSI E QUEIROZ MARCAS E PATENTES LTDA": "612",
-            "NGX BRASIL TECNOLOGIA LTDA": "613",
-            "BRAMOS ADMINISTRAÇÃO DE OBRAS LTDA": "614",
-            "KARL MARX ARRUDA SILVEIRA": "615",
-            "49.509.915 GABRIELA DE FREITAS NUNES": "616",
-            "52.904.040 PEDRO EMANOEL MARINHO SOUZA": "617",
-            "SEBASTIAO JOSE LACERDA DE ANDRADE CONSULTORIA EM TECNOLOGIA DA INFORMACAO LTDA": "618",
-            "FLANKR TECNOLOGIA LTDA": "619",
-            "CAYO GABRYEL HOLLANDA ANDRADE": "620",
-            "52.522.022 LUCAS CORREIA LUCENA DE SOUZA RIBEIRO": "621",
-            "JOICE RAFAELA DE ARAUJO FERNANDES": "622",
-            "THIAGO FELIPE VIANA DINIZ": "623",
-            "52.813.186 JOAO VICTOR MARINHO SOUZA": "624",
-            "JOAO CALIXTO DA SILVA NETO": "625",
-            "FRANCISCO WELIO FIRMINO DA SILVA JUNIOR": "626",
-            "ORBIT TECH SERVICO DE TECNOLOGIA LTDA": "627",
-            "GROEN CONSULTORIA EM TECNOLOGIA LTDA": "628",
-            "OBVIO BRASIL SOFTWARE E SERVICOS S.A.": "629",
-            "ART MAKER COMUNICACAO LTDA": "630",
-            "CLUSTER LTDA": "631",
-            "ATIVO GAMES LTDA": "691",
-            "APPROVE PAYMENT": "646",
-            "M D EVANGELISTA": "647",
-            "EBTRANS LOGISTICA LTDA": "648",
-            "PRIMETIME COMUNICACAO LTDA": "792",
-            "THUNDER SERVICOS": "650",
-            "ALBUQUERQUE MAIA": "651",
-            "SALES MOVEIS": "652",
-            "PIXGAMING": "653",
-            "ILLUMINARE STUDIO": "654",
-            "JP BALOES": "655",
-            "JOAO LUCAS COSTA": "656",
-            "CABRAL COMERCIO": "657",
-            "CLIMARIO": "658",
-            "DOM CAFE E SERVICOS DE CAFE": "659",
-            "GELAR CLIMATIZAÇÃO": "660",
-            "RIBALTA HOTELARIA E TURISMO": "661",
-            "EXATO DIGITAL LTDA": "662",
-            "VP SOLUCOES EM FECHADURAS": "663",
-            "CHURRASCARIA FOGO DE CHAO": "664",
-            "RASP NEGOCIOS E INTERMEDIAÇÕES": "665",
-            "TV SBT": "666",
-            "FRENTE CORRETORA DE CAMBIO": "667",
-            "ESCRITÓRIO DR. FEIJÓ": "668",
-            "ACG ADMINISTRADORA": "669",
-            "ISRAEL MACENA": "670",
-            "AUDITOR AUDITORES INDEPENDENTES": "672",
-            "RGBC LTDA": "673",
-            "EDUARDO CRISTIAN": "674",
-            "WALTER VIEIRA DE MELO": "676",
-            "LESKA": "675",
-            "IAGO ERSON SANTIAGO DE AMARANTE": "677",
-            "CAIO CASE DOS SANTOS": "741",
-            "DIOGO FERREIRA": "679",
-            "VM CONSTRUÇÕES E SO": "680",
-            "NEVES E MONTEIRO": "681",
-            "J CARLOS COMERCIO ATACADISTA DE MOVEIS EIRELI": "685",
-            "SPORTRADAR BRAZIL LTDA": "708",
-            "RIOPAG S/A": "853",
-            "AH MARKETING DIGITAL LTDA.": "710",
-            "BRUNO MOURA SILVA": "711",
-            "MOD - MARKETING ORIENTADO A DADOS LTDA": "712",
-            "MARCO ANTONIO PEREIRA DA SILVA": "713",
-            "JUSSIER KELLVIN DE SOUZA": "714",
-            "THIERRY MATHEUS BEZERRA DE MELO": "715",
-            "ARRUDA COMUNICAÇÃO LTDA": "716",
-            "JEFFERSON JORGE DE ARAUJO RODRIGUES": "717",
-            "LUPERCIO DAVI FARIAS LUCAS": "718",
-            "KAMINO INSTITUIÇÃO DE PAGAMENTO LTDA": "719",
-            "HYGOR GONCALVES DUARTE": "720",
-            "JESSICA STEPHANNE DA SILVA COSTA": "721",
-            "INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA": "722",
-            "ERICA CRISTIANE DA SILVA LIMA": "723",
-            "CAMILA AYUMI KADO": "724",
-            "ISMENIA VITORIA SANTIAGO DE AMARANTE": "725",
-            "YASMIN AMELIA FIRMINO": "726",
-            "LEANDRO RODRIGUES DE JESUS": "727",
-            "GABRIELLA SERRANONE CONRADO": "728",
-            "MATHEUS HENRIQUE GUEDES DE OLIVEIRA": "729",
-            "ARTHUR TORRES PAIVA LTDA": "730",
-            "RISE ADMINISTRACAO LTDA": "731",
-            "LUIZ FELIPE FERREIRA DA SILVA": "732",
-            "VICTOR NASCIMENTO LIMA": "733",
-            "RENAN PHELIPE ASSIS LIMA MAHON": "734",
-            "KAIO EDUARDO MIRANDA GOMES": "735",
-            "CARLOS RAFAEL FEITOSA RODRIGUES": "736",
-            "X7 ASSESSORIA FINANCEIRA - JORGE S ARAUJO": "737",
-            "FEIJO E SOUZA SOCIEDADE DE ADVOGADOS": "738",
-            "FREITAS E RODRIGUES NEGOCIOS E INTERMEDIACOES LTDA": "739",
-            "MAISA GOMES DO NASCIMENTO": "740",
-            "JHONATHAN WENDELL DE OLIVEIRA MELO": "742",
-            "VINICIUS PREBIL ALCANTARA 44061109847": "743",
-            "SALES INDUSTRIA E COMERCIO DE MOVEIS LTDA": "745",
-            "BETPASS LTDA": "766",
-            "JAMPA BALOES E COMUNICACAO VISUAL LTDA": "767",
-            "JANAIRES ALCANTARA DE MEDEIROS": "768",
-            "RASP NEGOCIOS E INTERMEDIACOES LTDA": "769",
-            "EDUARDO CRISTIAN DE MENDONCA RODRIGUES LTDA": "770",
-            "NEVES E MONTEIRO TREINAMENTOS LTDA": "771",
-            "GENILZA MENDES DA COSTA": "772",
-            "DANNYELLE ALVES DOS SANTOS LUNA": "773",
-            "EYTOR FERRAZ GOMES DE MENEZES": "774",
-            "NDP ENTRETENIMENTO E VENDAS LTDA": "775",
-            "EDILSON MACHADO DO NASCIMENTO": "776",
-            "BLACK IA TECNOLOGIA LTDA": "777",
-            "MR TV E RADIO WEB CAMPINA GRANDE LTDA": "778",
-            "LEC EDUCACAO E PESQUISA LTDA": "779",
-            "JONATHAN MARQUES MINDAS": "780",
-            "ARTMETAL LTDA": "781",
-            "AMANDA GABRIELE LIMA TORRES": "782",
-            "IVAH MARKETING & GAMING LTDA": "783",
-            "ISRAEL MACENA SILVA": "784",
-            "AQUARACE SERVICOS E EVENTOS AQUATICOS LTDA": "785",
-            "IVLA MARANHAO SANTOS DE OLIVEIRA": "786",
-            "RICHARD L GLOBAL SECURITIES LTDA": "787",
-            "MARIA DOS PRAZERES RODRIGUES DA SILVA": "788",
-            "CLARIZA IRIS LIMA E SILVA": "789",
-            "DANIEL RIBEIRO DE ARAUJO LEITE": "790",
-            "TALES DMITRI ARAUJO LOPES": "791",
-            "LEGITIMUZ TECNOLOGIA LTDA": "793",
-            "XTREMEPUSH LTDA": "794",
-            "JACARANDATECH LTDA": "795",
-            "TT CAMBIO E TURISMO LTDA": "796",
-            "DAXX SOLUTIONS LTDA": "797",
-            "ACG INSTITUICAO DE PAGAMENTO S A": "800",
-            "SANTIAGO COMUNICACAO E MODA LTDA": "801",
-            "WESLLEY PATRICIO GOMES DE OLIVEIRA": "802",
-            "CMD BONES": "803",
-            "JEFFERSON BARBOSA DO NASCIMENTO": "804",
-            "PABLO GADELHA VIANA SOCIEDADE INDIVIDUAL DE ADVOCACIA": "805",
-            "RONILDO CASSIO DE CAMPOS & CIA LTDA": "806",
-            "ARNALDO FERREIRA DE MENDONCA NETO": "807",
-            "RS COMERCIO DE VIDROS E TECNOLOGIA LTDA": "808",
-            "FAMILY OFFICE CORPORATE SERVICOS LTDA": "809",
-            "AMAURI DE AQUINO GONCALVES 05522799439": "810",
-            "PIX GAMING DIGITAL MARKETING LTDA": "811",
-            "MB CONSULTORIA ESPORTIVA LTDA": "812",
-            "MARIA PRISCILLA DE SOUZA MENEZES": "813",
-            "MARIA CAROLINY SANTOS DE MELO": "814",
-            "KARTEJANE DEL SANTO DA SILVA": "815",
-            "SUPER BRINDES LTDA": "816",
-            "TAUANY ZANATA MARTINS": "817",
-            "FELIPE GUSTAVO MARTINS DE CASTRO": "818",
-            "BAZZANEZE AUDITORES INDEPENDENTES S/S": "819",
-            "ANNE SUENIA DA SILVA SALES": "820",
-            "M D EVANGELISTA - PRODUCOES": "821",
-            "DSA-EVENTOS ESPORTIVOS LTDA": "822",
-            "P. I. TEIXEIRA SANTOS": "823",
-            "LUCAS MATHEUS MUNIZ DA SILVA": "824",
-            "INFOSTARK LTDA": "825",
-            "MS DESENVOLVIMENTO E SOLUCOES DIGITAIS LTDA": "826",
-            "POUSADA E RECEPTIVO ARIUS LTDA": "827",
-            "HOLANDA SUPORTE E CAPACITACOES LTDA": "828",
-            "ALEFE GUIMEL LINS BARBOSA CONSULTORIA EM MARKETING LTDA": "829",
-            "JOSE LEONARDO FRANCELINO LOPES LTDA": "830",
-            "JULLYAN JENNYFER OLIVEIRA PEQUENO": "836",
-            "ORLANDO MARCELINO S SANTOS": "832",
-            "NARDA MARIA FLORENCIO DOS SANTOS": "833",
-            "WALISSON ROMARIO FERREIRA": "834",
-            "FELIPE ARRUDA SOCIEDADE INDIVIDUAL DE ADVOCACIA": "837",
-            "57.221.901 FRANCYNEIDE GUEDES DE FREITAS ZECA": "838",
-            "MARIA HELOISA DE ARAUJO CAMPOS": "839",
-            "62.967.608 EDINALDO GOMES DE ARAUJO": "840",
-            "SORTE & PROMO LTDA": "843",
-            "PLANET INVEST - FOMENTO COMERCIAL LTDA": "844",
-            "EVOLUTION SERVICES BRAZIL LTDA": "845",
-            "M A SILVA BARBOSA": "846",
-            "NAEDJA AGRA CORDEIRO CONFECÇÕES LTDA": "848",
-            "J B DIAS LTDA": "849",
-            "CAPELLA TECNOLOGIA ACUSTICA LTDA": "850",
-            "EGNA DE ARAUJO SILVA": "851",
-            "64.669.257 JOAO ANTONIO DE HOLANDA CURVELO SALSA": "852",
-            "FACEBOOK SERVIÇOS ONLINE DO BRASIL LTDA": "854"
-        }
-    },
     "EMPRESA PADRÃO (Genérica)": {
         "impostos": {
             '0561': {'n': 'IRRF Genérico', 'c': '9999'}, 
@@ -1488,8 +1284,8 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V29.0")
-st.markdown("Extratos em Excel, Entradas/Saídas Automáticas e N° da Nota Fiscal.")
+st.title("🏦 Conciliador Contábil IA V29.2")
+st.markdown("Extratos em Excel, Entradas/Saídas Automáticas e Múltiplos Formatos de Download.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1557,7 +1353,6 @@ if excel_file and receipt_files:
         c_v = next((c for c in df_dom.columns if "valor" in c.lower() and "cont" in c.lower()), next((c for c in df_dom.columns if "valor" in c.lower() or "vlr" in c.lower()), None))
         c_cli = next((c for c in df_dom.columns if any(x in c.lower() for x in ["fornecedor", "cliente", "nome"])), "Fornecedor")
         
-        # PROCURA A COLUNA DE NOTA
         c_nota = next((c for c in df_dom.columns if any(x in c.lower() for x in ["nota", "doc", "núm", "num"])), None)
         
         df_dom = df_dom.reset_index(drop=True)
@@ -1575,7 +1370,6 @@ if excel_file and receipt_files:
         d_ex_obj = converter_data_dominio(l[c_d])
         if v_ex == 0 or d_ex_obj is None: continue 
         
-        # LIMPEZA DO NÚMERO DA NOTA (Remove .0 se o Excel tiver lido como número)
         nota_val = l[c_nota] if c_nota and not pd.isna(l[c_nota]) else "-"
         if isinstance(nota_val, float) and nota_val.is_integer():
             nota_val = int(nota_val)
@@ -1617,7 +1411,6 @@ if excel_file and receipt_files:
                         str_debito = formatar_codigo_nome(conta_debito, nome_debito)
                         str_credito = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
 
-                        # SEPARAÇÃO DE ENTRADAS E SAÍDAS BASEADO NA NATUREZA DA TRANSAÇÃO
                         is_credito = doc.get('Is_Credito', False)
                         val_entrada = v_ex if is_credito else 0.0
                         val_saida = v_ex if not is_credito else 0.0
@@ -1635,7 +1428,6 @@ if excel_file and receipt_files:
             if match_found: break
             
         if not match_found:
-            # Caso não ache o PDF, decide se é entrada ou saída baseado no Filtro do Usuário
             val_entrada = 0.0
             val_saida = 0.0
             if "Receber" in modo_conciliacao: val_entrada = v_ex
@@ -1684,7 +1476,6 @@ if excel_file and receipt_files:
     st.subheader(f"📋 Relatório de Conciliação - {empresa_selecionada}")
     disp = res_df.copy()
     
-    # NOVA ORDEM DAS COLUNAS: Incluindo Nota, Entradas e Saídas
     col_order = ['Status', 'Data Excel', 'Nota', 'Valor Total', 'Entradas', 'Saídas', 'Imposto', 'Favorecido', 'Data PDF', 'Banco', 'Débito', 'Crédito', 'Principal', 'Multa', 'Juros', 'Cód. Receita', 'Arquivo']
     disp = disp[[c for c in col_order if c in disp.columns]]
     
@@ -1698,8 +1489,18 @@ if excel_file and receipt_files:
     styled = disp.style.map(color_status, subset=['Status']) if hasattr(disp.style, 'map') else disp.style.applymap(color_status, subset=['Status'])
     st.dataframe(styled, use_container_width=True)
     
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
-    
-    nome_arquivo = f"conciliacao_{empresa_selecionada.split()[0].lower()}.xlsx"
-    st.download_button("📥 Baixar Excel", out.getvalue(), nome_arquivo)
+    # Preparação para download Excel
+    out_excel = io.BytesIO()
+    with pd.ExcelWriter(out_excel, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
+    nome_arquivo_excel = f"conciliacao_{empresa_selecionada.split()[0].lower()}.xlsx"
+
+    # Preparação para download TXT (Separado por Tabulação para ficar alinhado)
+    out_txt = res_df.to_csv(sep='\t', index=False).encode('utf-8')
+    nome_arquivo_txt = f"conciliacao_{empresa_selecionada.split()[0].lower()}.txt"
+
+    # Criar duas colunas para os botões de download ficarem lado a lado
+    col_dl1, col_dl2 = st.columns(2)
+    with col_dl1:
+        st.download_button("📥 Baixar Excel", out_excel.getvalue(), nome_arquivo_excel)
+    with col_dl2:
+        st.download_button("📄 Baixar TXT", out_txt, nome_arquivo_txt)
