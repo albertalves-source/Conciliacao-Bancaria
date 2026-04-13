@@ -97,7 +97,7 @@ def limpar_nome_contabil(nome):
     return resultado
 
 def formatar_codigo_nome(codigo, nome):
-    """Junta o código contábil ao nome (Ex: 587 - Conta Simples)."""
+    """Junta o código contábil ao nome (Ex: 587 - Conta Simples). Limpa zeros residuais."""
     cod_str = str(codigo).strip()
     if cod_str.endswith('.0'): cod_str = cod_str[:-2]
     if not cod_str or cod_str in ['9999', '99', 'nan', '-']: return str(nome)
@@ -139,9 +139,9 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                         
                         if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
-                        is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO"])
-                        if "Pagar" in modo_conciliacao and is_credito: continue 
-                        if "Receber" in modo_conciliacao and not is_credito: continue 
+                        # Definição mais rigorosa de Entrada vs Saída
+                        is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
+                        
                         if any(t in linha_upper for t in termos_ignorar if t): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
@@ -160,7 +160,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                                 if c in mapa_imp: cod_found = c; break
                             
                             for v_txt in valor_match:
-                                val = limpar_valor(v_txt)
+                                val = abs(limpar_valor(v_txt)) # Força valor positivo para análise
                                 if val > 0:
                                     transacoes.append({
                                         'Data': [data_match.group(1)], 'Total': val,
@@ -173,15 +173,13 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
                     texto_upper = texto_completo.upper()
                     
-                    is_credito_doc = any(x in texto_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO"])
-                    if "Pagar" in modo_conciliacao and is_credito_doc: return []
-                    if "Receber" in modo_conciliacao and not is_credito_doc: return []
+                    is_credito_doc = any(x in texto_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
                     
                     rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
                     datas = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto_completo)))
                     valores = re.findall(r'(\d[\d\.]*,\d{2})', texto_completo)
                     if datas and valores:
-                        v_f = limpar_valor(valores[-1])
+                        v_f = abs(limpar_valor(valores[-1]))
                         transacoes.append({
                             'Data': datas, 'Total': v_f, 'Cod': rec.group(1) if rec else "",
                             'Banc': banco_base, 'Fav': "COMPROVANTE FISCAL",
@@ -213,9 +211,9 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                 linha_upper = linha.upper()
                 
                 if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
-                is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO"])
-                if "Pagar" in modo_conciliacao and is_credito: continue 
-                if "Receber" in modo_conciliacao and not is_credito: continue 
+                
+                is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
+                
                 if any(t in linha_upper for t in termos_ignorar if t): continue
                 
                 data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
@@ -233,7 +231,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                         if c in mapa_imp: cod_found = c; break
                     
                     for v_txt in valor_match:
-                        val = limpar_valor(v_txt)
+                        val = abs(limpar_valor(v_txt)) # Força valor positivo
                         if val > 0:
                             transacoes.append({
                                 'Data': [data_match.group(1)], 'Total': val,
@@ -1425,8 +1423,8 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V30.0")
-st.markdown("Extratos em Excel, Entradas/Saídas Automáticas e N° da Nota Fiscal.")
+st.title("🏦 Conciliador Contábil")
+st.markdown("Extratos em Excel, Entradas/Saídas Automáticas e Múltiplos Formatos de Download.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1493,6 +1491,7 @@ if excel_file and receipt_files:
         c_d = next((c for c in df_dom.columns if "data" in c.lower()), None)
         c_v = next((c for c in df_dom.columns if "valor" in c.lower() and "cont" in c.lower()), next((c for c in df_dom.columns if "valor" in c.lower() or "vlr" in c.lower()), None))
         c_cli = next((c for c in df_dom.columns if any(x in c.lower() for x in ["fornecedor", "cliente", "nome"])), "Fornecedor")
+        
         c_nota = next((c for c in df_dom.columns if any(x in c.lower() for x in ["nota", "doc", "núm", "num"])), None)
         
         df_dom = df_dom.reset_index(drop=True)
@@ -1506,7 +1505,7 @@ if excel_file and receipt_files:
 
     rows, ids_pdf_usados = [], set()
     for idx, l in df_dom.iterrows():
-        v_ex = limpar_valor(l[c_v])
+        v_ex = abs(limpar_valor(l[c_v]))
         d_ex_obj = converter_data_dominio(l[c_d])
         if v_ex == 0 or d_ex_obj is None: continue 
         
@@ -1519,6 +1518,14 @@ if excel_file and receipt_files:
         match_found = False
         for i, doc in enumerate(todas_transacoes_pdf):
             if i in ids_pdf_usados: continue
+            
+            # --- NOVO FILTRO: Aplica a restrição de Pagar/Receber APENAS no cruzamento ---
+            is_credito_doc = doc.get('Is_Credito', False)
+            if "Pagar" in modo_conciliacao and is_credito_doc: 
+                continue # Se for pagar, não cruza com os créditos do Extrato
+            if "Receber" in modo_conciliacao and not is_credito_doc: 
+                continue # Se for receber, não cruza com os débitos do Extrato
+            
             for d_pdf_str in doc['Data']:
                 try:
                     d_pdf_obj = datetime.strptime(d_pdf_str, '%d/%m/%Y').date()
@@ -1551,9 +1558,8 @@ if excel_file and receipt_files:
                         str_debito = formatar_codigo_nome(conta_debito, nome_debito)
                         str_credito = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
 
-                        is_credito = doc.get('Is_Credito', False)
-                        val_entrada = v_ex if is_credito else 0.0
-                        val_saida = v_ex if not is_credito else 0.0
+                        val_entrada = v_ex if is_credito_doc else 0.0
+                        val_saida = v_ex if not is_credito_doc else 0.0
 
                         rows.append({
                             'Status': '✅ CONCILIADO', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
@@ -1570,13 +1576,27 @@ if excel_file and receipt_files:
         if not match_found:
             val_entrada = 0.0
             val_saida = 0.0
-            if "Receber" in modo_conciliacao: val_entrada = v_ex
-            else: val_saida = v_ex
+            fav_cli = str(l.get(c_cli, '')).upper()
+            
+            # Decide inteligente se um item do Domínio não conciliado é entrada ou saída
+            if "Receber" in modo_conciliacao: 
+                val_entrada = v_ex
+            elif "Pagar" in modo_conciliacao: 
+                val_saida = v_ex
+            else:
+                # No modo "Ambos", infere pelo nome da transação do Domínio
+                if any(x in fav_cli for x in ["CLIENTE", "RECEBIMENTO", "RECEITA", "DEPOSIT"]):
+                    val_entrada = v_ex
+                else:
+                    val_saida = v_ex
                 
             rows.append({
                 'Status': '❌ Só no Domínio', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
                 'Valor Total': v_ex, 'Entradas': val_entrada, 'Saídas': val_saida,
-                'Favorecido': str(l.get(c_cli, '')).upper(), 'Débito': '-', 'Crédito': '-'
+                'Imposto': '-', 'Favorecido': fav_cli, 'Data PDF': '-',
+                'Banco': '-', 'Débito': '-', 'Crédito': '-', 
+                'Principal': '-', 'Multa': '-', 'Juros': '-',
+                'Cód. Receita': '-', 'Arquivo': '-'
             })
 
     for i, doc in enumerate(todas_transacoes_pdf):
