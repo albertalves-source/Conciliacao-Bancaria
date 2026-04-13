@@ -142,6 +142,10 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                         # Definição mais rigorosa de Entrada vs Saída
                         is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
                         
+                        # Aplica Filtro do Utilizador ANTES do cruzamento, apenas ao Extrato
+                        if "Pagar" in modo_conciliacao and is_credito: continue 
+                        if "Receber" in modo_conciliacao and not is_credito: continue 
+                        
                         if any(t in linha_upper for t in termos_ignorar if t): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
@@ -174,6 +178,9 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                     texto_upper = texto_completo.upper()
                     
                     is_credito_doc = any(x in texto_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
+                    
+                    if "Pagar" in modo_conciliacao and is_credito_doc: return []
+                    if "Receber" in modo_conciliacao and not is_credito_doc: return []
                     
                     rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
                     datas = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto_completo)))
@@ -213,6 +220,9 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                 if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                 
                 is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
+                
+                if "Pagar" in modo_conciliacao and is_credito: continue 
+                if "Receber" in modo_conciliacao and not is_credito: continue 
                 
                 if any(t in linha_upper for t in termos_ignorar if t): continue
                 
@@ -1423,8 +1433,8 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil")
-st.markdown("Extratos em Excel, Entradas/Saídas Automáticas e Múltiplos Formatos de Download.")
+st.title("🏦 Conciliador Contábil IA V32.0")
+st.markdown("Extratos em Excel, Inteligência de Entradas/Saídas Automáticas (CFOP/Termos) e Filtros.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1438,7 +1448,7 @@ with st.sidebar:
     st.divider()
     st.header("🎯 Natureza da Conciliação")
     modo_conciliacao = st.radio(
-        "O que estamos a conciliar?", 
+        "Filtrar ecrã para:", 
         ["Contas a Pagar (Apenas Débitos/Vermelho)", 
          "Contas a Receber (Apenas Créditos/Verde)", 
          "Ambos (Extrato Completo)"],
@@ -1514,17 +1524,47 @@ if excel_file and receipt_files:
             nota_val = int(nota_val)
         nota_ex = str(nota_val).replace('.0', '') if str(nota_val).endswith('.0') else str(nota_val)
         if nota_ex == "nan": nota_ex = "-"
+        
+        # --- INTELIGÊNCIA: DESCOBRIR A NATUREZA DA LINHA DO DOMÍNIO ---
+        fav_cli = str(l.get(c_cli, '')).upper()
+        is_entrada_dom = False # Por padrão assume Saída (Pagamento a Fornecedores/Despesas)
+        
+        achou_forn = False
+        if fav_cli in mapa_fornecedores:
+            achou_forn = True
+        else:
+            for f_nome in mapa_fornecedores.keys():
+                if f_nome in fav_cli:
+                    achou_forn = True; break
+        
+        if achou_forn:
+            is_entrada_dom = False
+        else:
+            # Verifica CFOP (Entrada na contabilidade = Despesa = Saída de Dinheiro)
+            c_cfop = next((c for c in df_dom.columns if "cfop" in c.lower()), None)
+            if c_cfop and not pd.isna(l[c_cfop]):
+                cfop_val = str(l[c_cfop]).strip()
+                if cfop_val.startswith(('1', '2', '3')): is_entrada_dom = False # Compra/Pagamento
+                elif cfop_val.startswith(('5', '6', '7')): is_entrada_dom = True # Venda/Recebimento
+            else:
+                # Termos de Receita/Clientes
+                termos_entrada = ["CLIENTE", "RECEBIMENTO", "RECEITA", "DEPOSIT", "DECOLA", "GATWAY", "API", "GGR", "GROSS", "REVENUE", "APLICACAO", "RESGATE", "RENDIMENTO", "ESTORNO", "DEVOLUÇÃO", "DEVOLUCAO"]
+                if any(x in fav_cli for x in termos_entrada):
+                    is_entrada_dom = True
 
         match_found = False
         for i, doc in enumerate(todas_transacoes_pdf):
             if i in ids_pdf_usados: continue
             
-            # --- NOVO FILTRO: Aplica a restrição de Pagar/Receber APENAS no cruzamento ---
             is_credito_doc = doc.get('Is_Credito', False)
-            if "Pagar" in modo_conciliacao and is_credito_doc: 
-                continue # Se for pagar, não cruza com os créditos do Extrato
-            if "Receber" in modo_conciliacao and not is_credito_doc: 
-                continue # Se for receber, não cruza com os débitos do Extrato
+            
+            # O Rádio apenas filtra o que processar visualmente!
+            if "Pagar" in modo_conciliacao and is_credito_doc: continue 
+            if "Receber" in modo_conciliacao and not is_credito_doc: continue 
+            
+            # Proteção VITAL: Impede cruzamento de Entrada (Domínio) com Saída (Extrato) e vice-versa
+            if is_entrada_dom and not is_credito_doc: continue
+            if not is_entrada_dom and is_credito_doc: continue
             
             for d_pdf_str in doc['Data']:
                 try:
@@ -1558,6 +1598,7 @@ if excel_file and receipt_files:
                         str_debito = formatar_codigo_nome(conta_debito, nome_debito)
                         str_credito = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
 
+                        # Usa a natureza correta da transação que o robô inferiu
                         val_entrada = v_ex if is_credito_doc else 0.0
                         val_saida = v_ex if not is_credito_doc else 0.0
 
@@ -1574,21 +1615,12 @@ if excel_file and receipt_files:
             if match_found: break
             
         if not match_found:
-            val_entrada = 0.0
-            val_saida = 0.0
-            fav_cli = str(l.get(c_cli, '')).upper()
+            # Se o usuário filtrou a tela para um tipo específico (ex: Pagar), ocultamos o tipo oposto (Entradas) que sobrou do Excel
+            if "Pagar" in modo_conciliacao and is_entrada_dom: continue
+            if "Receber" in modo_conciliacao and not is_entrada_dom: continue
             
-            # Decide inteligente se um item do Domínio não conciliado é entrada ou saída
-            if "Receber" in modo_conciliacao: 
-                val_entrada = v_ex
-            elif "Pagar" in modo_conciliacao: 
-                val_saida = v_ex
-            else:
-                # No modo "Ambos", infere pelo nome da transação do Domínio
-                if any(x in fav_cli for x in ["CLIENTE", "RECEBIMENTO", "RECEITA", "DEPOSIT"]):
-                    val_entrada = v_ex
-                else:
-                    val_saida = v_ex
+            val_entrada = v_ex if is_entrada_dom else 0.0
+            val_saida = v_ex if not is_entrada_dom else 0.0
                 
             rows.append({
                 'Status': '❌ Só no Domínio', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
@@ -1601,6 +1633,12 @@ if excel_file and receipt_files:
 
     for i, doc in enumerate(todas_transacoes_pdf):
         if i not in ids_pdf_usados:
+            is_credito = doc.get('Is_Credito', False)
+            
+            # Filtro visual para sobras de extrato
+            if "Pagar" in modo_conciliacao and is_credito: continue
+            if "Receber" in modo_conciliacao and not is_credito: continue
+            
             b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
             
             fav_pdf = doc['Fav']
@@ -1620,7 +1658,6 @@ if excel_file and receipt_files:
             regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
             str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
             
-            is_credito = doc.get('Is_Credito', False)
             val_entrada = doc['Total'] if is_credito else 0.0
             val_saida = doc['Total'] if not is_credito else 0.0
             
