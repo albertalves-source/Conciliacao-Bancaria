@@ -153,7 +153,8 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                                         'Data': [data_match.group(1)], 'Total': val,
                                         'Cod': cod_found, 'Fav': nome_limpo, 
                                         'Banc': banco_base, 'IA': False, 'Arq': file.name,
-                                        'Principal': val, 'Multa': 0.0, 'Juros': 0.0
+                                        'Principal': val, 'Multa': 0.0, 'Juros': 0.0,
+                                        'Is_Credito': is_credito
                                     })
                 if not transacoes:
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
@@ -171,7 +172,8 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                         transacoes.append({
                             'Data': datas, 'Total': v_f, 'Cod': rec.group(1) if rec else "",
                             'Banc': banco_base, 'Fav': "COMPROVANTE FISCAL",
-                            'IA': False, 'Arq': file.name, 'Principal': v_f, 'Multa': 0.0, 'Juros': 0.0
+                            'IA': False, 'Arq': file.name, 'Principal': v_f, 'Multa': 0.0, 'Juros': 0.0,
+                            'Is_Credito': is_credito_doc
                         })
         except: pass
         
@@ -224,7 +226,8 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                                 'Data': [data_match.group(1)], 'Total': val,
                                 'Cod': cod_found, 'Fav': nome_limpo, 
                                 'Banc': banco_base, 'IA': False, 'Arq': file.name,
-                                'Principal': val, 'Multa': 0.0, 'Juros': 0.0
+                                'Principal': val, 'Multa': 0.0, 'Juros': 0.0,
+                                'Is_Credito': is_credito
                             })
         except Exception as e:
             st.warning(f"Não foi possível ler o Extrato em Excel '{file.name}': {e}")
@@ -1262,123 +1265,10 @@ BANCO_DE_DADOS_EMPRESAS = {
             "PROMAX SOLUCOES VISUAIS LTDA": "2022",
             "MARLEN JOSE DA SILVA": "2023",
             "BRUNO DE MEDEIROS GALVAO MAZUTTI": "2036",
-            "NAIP INSTITUICAO DE PAGAMENTO SA": "2040",
-            "GUSTAVO HENRIQUE SOUZA AGUIAR MARKETING": "1162",
-            "RAFLA MELLO WEB COMUNICACOES LTDA": "1329",
-            "IDENTIFICA SERVICOS DE PUBLICIDADE E REPRESENTACAO LTDA": "1330",
-            "FGM SPORTS LTDA": "1332",
-            "GERSON VAPO AGENCIAMENTO E COMERCIO DE ARTIGOS ESPORTIVOS LTDA": "1333",
-            "ALL TYPE COMUNICAÇÃO E MARKETING LTDA": "1334",
-            "RIO DE JANEIRO VOLEI CLUBE": "1336",
-            "NATHAN ANDRADE SILVA": "1337",
-            "PLASTPROMO": "1339",
-            "IMPULSEMAX MARKETING LTDA": "1340",
-            "INDYRA JESSIKA QUEIROZ LINHARES": "1341",
-            "MOURA BENEVIDES": "1342",
-            "MIDAS MIDIA": "1343",
-            "GAMING DIGITAL": "1418",
-            "CRAB DE BURGOS SOCIEDADE UNIPESSOAL LTDA - INTERATIVA VIEWS": "1421",
-            "RIO ESTREITO ENTRETENIMENTO LTDA": "1425",
-            "G. KAGAN REIS LTDA": "1426",
-            "VINICIUS PAZ": "1427",
-            "EDIVANDO PEDRO DA SILVA JUNIOR": "1428",
-            "EMPOZE - EDITORA, GRAVADORA E PRESTACAO DE SERVICOS LTDA": "1429",
-            "LETICIA CERQUEIRA - MOURA PIRES ENTRETENIMENTO LTDA": "1430",
-            "WILLIAM PINTO DE ITABUNA PRODUCAO TEATRAL": "1431",
-            "G.O.PROPAGANDA E PROMOCOES LTDA": "1433",
-            "STAEL CONFECCOES DE UNIFORMES LTDA ME": "1434",
-            "AVELO NEGOCIOS E SERVICOS LTDA": "1435",
-            "PLANET INVEST- FOMENTO COMERCIAL LTDA": "1436",
-            "ENJOY MARKETING E MIDIAS SOCIAIS LTDA": "1437",
-            "JOSE ROBSON ALVES DA SILVA - ROBSON BODÃO": "1438",
-            "DANIEL PASSOS CAVALCANTI MOREIRA": "1439",
-            "BPERSONALIZED LTDA": "1440",
-            "DPF HEFESTO ARTIGOS ESPORTIVOS LTDA": "1552",
-            "EMC TRANSFERS IMPRESSOES LTDA": "1554",
-            "GREMIO RECREATIVO CULTURAL SOCIAL ESCOLA DE SAMBA": "1555",
-            "NLN PROMOCOES LTDA": "1557",
-            "SEND SPEED PRODUTOS E SERVIÇOS LTDA": "1558",
-            "TRAP GROOVE SHOWS LTDA": "1672",
-            "GABRIEL DE BARROS SANCHES PEREIRA": "1673",
-            "MORAH IMOVEIS LTDA": "1676",
-            "ALEX SOLUCOES DIGITAIS LTDA": "1677",
-            "CAMILLA NASCIMENTO PESTANA DOS SANTOS": "1715",
-            "TRACK INFO SOLUÇÕES DIGITAIS LTDA": "1716",
-            "MATHEUS PONTES MENEZES": "1717",
-            "RODRIGO AZEVEDO DE CASTRO": "1719",
-            "ALL FC LTDA": "1720",
-            "RAQUEL ARAÚJO CARVALHO": "1721",
-            "TZ PRODUCOES E ASSESSORIA ARTISTICA LTDA": "1722",
-            "SOFTERS SISTEMAS LTDA": "1755",
-            "WUESILVA DIGITAL INFLUENCER LTDA": "1756",
-            "ANA CAROLINA PEREIRA RAMOS": "1757",
-            "ASSOCIACAO PARAIBANA DOS DEFICIENTES VISUAIS - APADEVI": "1758",
-            "TF SOLUCOES DIGITAIS LTDA": "1759",
-            "V. L COMERCIO DE BRINDES PROMOCIONAIS LTDA": "1760",
-            "BOOSTER PRODUCOES AUDIVISUAIS E CULTURAIS LTDA": "1761",
-            "ELIANE SILVA SERVICOS LTDA": "1767",
-            "ONZEX PRODUCOES E PROMOCOES DE ESPETACULOS ARTISTICOS LTDA": "1799",
-            "RONALDO SIMOES ANGELIM LTDA": "1800",
-            "WILLIAN HENRIQUE RIBEIRO": "1801",
-            "A. DA S. ALMEIDA LTDA": "1802",
-            "LUAN DE JESUS SCANFERLA SA": "1803",
-            "GABRIELA PROPAGANDA E MARKETING LTDA": "1804",
-            "MARCELO THIAGO GOMES DE LIRA": "1805",
-            "BURITYPS ASSESSORIA E CONSULTORIA ESPORTIVA LTDA": "1806",
-            "ERIC NATAN BALBINO DE ARAUJO": "1807",
-            "JRX INTERNET LTDA": "1819",
-            "CAMISA DIMONA E MALHAS LTDA": "1827",
-            "INVENTOS DIGITAIS E COMERCIO LTDA": "1826",
-            "PEDRO PIRES DO RIO MOL 09957720708": "1889",
-            "CLAUDIO ROBERTO TORRES FILHO": "1890",
-            "ALMEIDA &SALSA CONSULTORIA, DESIGN & GRAFICA LTDA": "1895",
-            "RSP PRODUCOES E EVENTOS LTDA": "1896",
-            "KLAUDIA KALININ": "1897",
-            "MARCELO CORTES DA SILVA": "1898",
-            "LEONARDO CARVALHO JUNIOR": "1899",
-            "RELOCELLS ACESSORIOS LTDA": "1900",
-            "MICROSOFT DO BRASIL IMPORTACAO E COMERCIO DE SOFTWARE E VIDEO GAMES LTDA": "1908",
-            "GOOGLE CLOUD BRASIL COMPUTACAO E SERVICOS DE DADOS LTDA.": "1909",
-            "JOYCE DA CONCEIÇÃO DUARTE": "1911",
-            "A L M OLIVEIRA SENTIMENTO TRICOLOR AGÊNCIA DE NOTÍCIAS": "1912",
-            "GABRIEL DE ALMEIDA RAIMUNDI": "1913",
-            "FUTBOLACO PRODUTORA MARKETING E MIDIA LTDA ME": "1914",
-            "LUIZA QUINTANA FRAGA": "1915",
-            "VIBE AGENCY SERVIÇOS E COMUNICAÇÃO LTDA": "1916",
-            "JIR COMUNICACAO E MANUTENCAO ELETRONICOS LTDA": "1917",
-            "RENATO GUICE SENNE": "1918",
-            "PASV COMERCIO DE DISCOS E FITAS LTDA": "1920",
-            "FIRULA EM CAMPO LTDA": "1921",
-            "JULIANA DOS SANTOS RAMOS": "1922",
-            "ICARO VINICIUS MOREIRA DE MELLO": "1923",
-            "ANA BEATRIZ SANTOS DE FREITAS JARDIM": "1924",
-            "PAULO CESAR MATTOS DE OLIVEIRA": "1925",
-            "LUIZE STEFANI DA CONCEIÇÃO BRANDÃO": "1926",
-            "EDUARDO DA COSTA DUARTE": "1951",
-            "DIGITAL PRESENC X LTDA": "1953",
-            "ADLLEY YWCH LIMA DA SILVA": "1997",
-            "KAIO VINICIUS RODRIGUES DE OLIVEIRA": "1998",
-            "ALPHA SEND S/A": "1999",
-            "NEXUS TEC LTDA": "2000",
-            "DAVID ALLAN MEDEIROS DA SILVA": "2001",
-            "RODRIGO ALMEIDA DE OLIVEIRA": "2002",
-            "MATEUS MELO DO NASCIMENTO": "2003",
-            "EVERTON LAMARTINE NASCIMENTO ESTEVAM": "2004",
-            "JEFFERSON SILVA DE OLIVEIRA": "2005",
-            "FELIPE VENTUROTTI GAVINHO": "2006",
-            "REI COPY COMERCIO E SERVICOS DE COMUNICACAO VISUAL LTDA": "2024",
-            "PAMELLA WANCHERLINY PAIVA TORRES GUIMARAES": "2042",
-            "PAOLA VITORIA CHAVES": "2043",
-            "PEDRO HENRIQUE GARBINI RODRIGUES SANTOS": "2044",
-            "JSO SOLUCOES CORPORATIVAS LTDA": "2045",
-            "BIZZU MARKETING DIGITAL LTDA": "2046",
-            "GABRIEL ALMAS DE BARROS SOUTO": "2047",
-            "V.C.B. DA SILVA LTDA": "2048",
-            "INFINITY AGENCY LTDA": "2049",
-            "CAUAN RODRIGUES CAZELOTTO": "2050"
+            "NAIP INSTITUICAO DE PAGAMENTO SA": "2040"
         }
     },
-    "JBD COMUNICACAO E TECNOLOGIA LTDA": {
+     "JBD COMUNICACAO E TECNOLOGIA LTDA": {
         "impostos": {
             '0561': {'n': 'IRRF A RECOLHER', 'c': '178'}, 
             '2172': {'n': 'COFINS A RECOLHER', 'c': '180'}, 
@@ -1598,8 +1488,8 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V28.1")
-st.markdown("Extratos em Excel, Integração Total de Contas e Relatórios Detalhados.")
+st.title("🏦 Conciliador Contábil IA V29.0")
+st.markdown("Extratos em Excel, Entradas/Saídas Automáticas e N° da Nota Fiscal.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1667,6 +1557,9 @@ if excel_file and receipt_files:
         c_v = next((c for c in df_dom.columns if "valor" in c.lower() and "cont" in c.lower()), next((c for c in df_dom.columns if "valor" in c.lower() or "vlr" in c.lower()), None))
         c_cli = next((c for c in df_dom.columns if any(x in c.lower() for x in ["fornecedor", "cliente", "nome"])), "Fornecedor")
         
+        # PROCURA A COLUNA DE NOTA
+        c_nota = next((c for c in df_dom.columns if any(x in c.lower() for x in ["nota", "doc", "núm", "num"])), None)
+        
         df_dom = df_dom.reset_index(drop=True)
     except Exception as e:
         st.error(f"Erro ao ler ficheiro: {e}"); st.stop()
@@ -1682,6 +1575,13 @@ if excel_file and receipt_files:
         d_ex_obj = converter_data_dominio(l[c_d])
         if v_ex == 0 or d_ex_obj is None: continue 
         
+        # LIMPEZA DO NÚMERO DA NOTA (Remove .0 se o Excel tiver lido como número)
+        nota_val = l[c_nota] if c_nota and not pd.isna(l[c_nota]) else "-"
+        if isinstance(nota_val, float) and nota_val.is_integer():
+            nota_val = int(nota_val)
+        nota_ex = str(nota_val).replace('.0', '') if str(nota_val).endswith('.0') else str(nota_val)
+        if nota_ex == "nan": nota_ex = "-"
+
         match_found = False
         for i, doc in enumerate(todas_transacoes_pdf):
             if i in ids_pdf_usados: continue
@@ -1712,14 +1612,19 @@ if excel_file and receipt_files:
                                         nome_debito = f_nome
                                         break
                                         
-                        # A Magia da formatação (Código - Nome)
                         str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
                         str_favorecido = formatar_codigo_nome(conta_debito, fav_final)
                         str_debito = formatar_codigo_nome(conta_debito, nome_debito)
                         str_credito = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
 
+                        # SEPARAÇÃO DE ENTRADAS E SAÍDAS BASEADO NA NATUREZA DA TRANSAÇÃO
+                        is_credito = doc.get('Is_Credito', False)
+                        val_entrada = v_ex if is_credito else 0.0
+                        val_saida = v_ex if not is_credito else 0.0
+
                         rows.append({
-                            'Status': '✅ CONCILIADO', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Valor Total': v_ex,
+                            'Status': '✅ CONCILIADO', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
+                            'Valor Total': v_ex, 'Entradas': val_entrada, 'Saídas': val_saida,
                             'Imposto': str_imposto, 'Favorecido': str_favorecido, 'Data PDF': d_pdf_obj.strftime('%d/%m/%Y'),
                             'Banco': b_inf['nome'], 'Débito': str_debito, 'Crédito': str_credito, 
                             'Principal': doc.get('Principal', v_ex), 'Multa': doc.get('Multa', 0.0), 'Juros': doc.get('Juros', 0.0),
@@ -1728,8 +1633,19 @@ if excel_file and receipt_files:
                         ids_pdf_usados.add(i); match_found = True; break
                 except: continue
             if match_found: break
+            
         if not match_found:
-            rows.append({'Status': '❌ FALTA PDF', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Valor Total': v_ex, 'Favorecido': str(l.get(c_cli, '')).upper(), 'Débito': '-', 'Crédito': '-'})
+            # Caso não ache o PDF, decide se é entrada ou saída baseado no Filtro do Usuário
+            val_entrada = 0.0
+            val_saida = 0.0
+            if "Receber" in modo_conciliacao: val_entrada = v_ex
+            else: val_saida = v_ex
+                
+            rows.append({
+                'Status': '❌ Só no Domínio', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
+                'Valor Total': v_ex, 'Entradas': val_entrada, 'Saídas': val_saida,
+                'Favorecido': str(l.get(c_cli, '')).upper(), 'Débito': '-', 'Crédito': '-'
+            })
 
     for i, doc in enumerate(todas_transacoes_pdf):
         if i not in ids_pdf_usados:
@@ -1752,18 +1668,31 @@ if excel_file and receipt_files:
             regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
             str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
             
-            rows.append({'Status': '⚠️ SÓ NO PDF', 'Data PDF': doc['Data'][0], 'Valor Total': doc['Total'], 'Imposto': str_imposto, 'Favorecido': formatar_codigo_nome(conta_debito, fav_pdf), 'Banco': b_inf['nome'], 'Débito': formatar_codigo_nome(conta_debito, nome_debito), 'Crédito': formatar_codigo_nome(b_inf['reduzido'], b_inf['nome']), 'Arquivo': doc['Arq']})
+            is_credito = doc.get('Is_Credito', False)
+            val_entrada = doc['Total'] if is_credito else 0.0
+            val_saida = doc['Total'] if not is_credito else 0.0
+            
+            rows.append({
+                'Status': '⚠️ Só no Extrato', 'Data PDF': doc['Data'][0], 'Nota': '-',
+                'Valor Total': doc['Total'], 'Entradas': val_entrada, 'Saídas': val_saida,
+                'Imposto': str_imposto, 'Favorecido': formatar_codigo_nome(conta_debito, fav_pdf), 
+                'Banco': b_inf['nome'], 'Débito': formatar_codigo_nome(conta_debito, nome_debito), 
+                'Crédito': formatar_codigo_nome(b_inf['reduzido'], b_inf['nome']), 'Arquivo': doc['Arq']
+            })
 
     res_df = pd.DataFrame(rows).fillna("-")
     st.subheader(f"📋 Relatório de Conciliação - {empresa_selecionada}")
     disp = res_df.copy()
-    col_order = ['Status', 'Data Excel', 'Valor Total', 'Imposto', 'Favorecido', 'Data PDF', 'Banco', 'Débito', 'Crédito', 'Principal', 'Multa', 'Juros', 'Cód. Receita', 'Arquivo']
+    
+    # NOVA ORDEM DAS COLUNAS: Incluindo Nota, Entradas e Saídas
+    col_order = ['Status', 'Data Excel', 'Nota', 'Valor Total', 'Entradas', 'Saídas', 'Imposto', 'Favorecido', 'Data PDF', 'Banco', 'Débito', 'Crédito', 'Principal', 'Multa', 'Juros', 'Cód. Receita', 'Arquivo']
     disp = disp[[c for c in col_order if c in disp.columns]]
-    for col in ['Valor Total', 'Principal', 'Multa', 'Juros']:
+    
+    for col in ['Valor Total', 'Entradas', 'Saídas', 'Principal', 'Multa', 'Juros']:
         if col in disp.columns: disp[col] = disp[col].apply(formatar_moeda)
 
     def color_status(val):
-        color = 'rgba(46, 204, 113, 0.08)' if val == '✅ CONCILIADO' else 'rgba(231, 76, 60, 0.08)' if val == '❌ FALTA PDF' else 'rgba(241, 196, 15, 0.08)'
+        color = 'rgba(46, 204, 113, 0.08)' if val == '✅ CONCILIADO' else 'rgba(231, 76, 60, 0.08)' if val == '❌ Só no Domínio' else 'rgba(241, 196, 15, 0.08)'
         return f'background-color: {color}'
 
     styled = disp.style.map(color_status, subset=['Status']) if hasattr(disp.style, 'map') else disp.style.applymap(color_status, subset=['Status'])
