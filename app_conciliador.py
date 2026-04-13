@@ -1449,7 +1449,7 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V37.0")
+st.title("🏦 Conciliador Contábil")
 st.markdown("Extratos em Excel e Robô Autodidata (Aprende Códigos do Domínio).")
 
 with st.sidebar:
