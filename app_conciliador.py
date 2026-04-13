@@ -103,7 +103,7 @@ def formatar_codigo_nome(codigo, nome):
     if not cod_str or cod_str in ['9999', '99', 'nan', '-']: return str(nome)
     return f"{cod_str} - {nome}"
 
-def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, modo_conciliacao):
+def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
     transacoes = []
     banco_base = ""
     for b_key in mapa_bancos.keys():
@@ -121,14 +121,25 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar, 
                 for page in pdf.pages:
                     texto_pagina = page.extract_text()
                     if not texto_pagina: continue
-                    for linha in texto_pagina.split('\n'):
+                    
+                    # AGRUPAMENTO DE LINHAS PARA EXTRATOS COMPLEXOS
+                    linhas_originais = texto_pagina.split('\n')
+                    linhas_agrupadas = []
+                    linha_temp = ""
+                    for l in linhas_originais:
+                        if re.search(r'^\s*\d{2}/\d{2}/\d{4}', l):
+                            if linha_temp: linhas_agrupadas.append(linha_temp)
+                            linha_temp = l
+                        else:
+                            linha_temp += " " + l
+                    if linha_temp: linhas_agrupadas.append(linha_temp)
+                    
+                    for linha in linhas_agrupadas:
                         linha_upper = linha.upper()
                         
                         if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
                         is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
-                        
-                        # FILTROS FORAM REMOVIDOS DAQUI E MOVIDOS PARA BAIXO PARA NÃO PERDER DADOS
                         
                         if any(t in linha_upper for t in termos_ignorar if t): continue
                         
@@ -1410,8 +1421,8 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V32.1")
-st.markdown("Extratos em Excel, Inteligência de Entradas/Saídas Automáticas (CFOP/Termos) e Filtros.")
+st.title("🏦 Conciliador Contábil IA V33.0")
+st.markdown("Extratos em Excel e Identificação Automática de Entradas/Saídas (Livre de Filtros Manuais).")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1421,16 +1432,6 @@ with st.sidebar:
     )
     
     config_atual = BANCO_DE_DADOS_EMPRESAS[empresa_selecionada]
-    
-    st.divider()
-    st.header("🎯 Natureza da Conciliação")
-    modo_conciliacao = st.radio(
-        "Filtrar ecrã para:", 
-        ["Contas a Pagar (Apenas Débitos/Vermelho)", 
-         "Contas a Receber (Apenas Créditos/Verde)", 
-         "Ambos (Extrato Completo)"],
-        index=0
-    )
     
     st.divider()
     st.header("⚙️ Parâmetros")
@@ -1491,7 +1492,7 @@ if excel_file and receipt_files:
     todas_transacoes_pdf = []
     for f in receipt_files:
         with st.spinner(f"A processar {f.name}..."):
-            todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar, modo_conciliacao))
+            todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar))
 
     rows, ids_pdf_usados = [], set()
     for idx, l in df_dom.iterrows():
@@ -1514,10 +1515,6 @@ if excel_file and receipt_files:
             fav_txt = str(l.get(c_cli, '')).upper()
             if any(t in fav_txt for t in ["CLIENTE", "RECEBIMENTO", "RECEITA", "DEPOSIT", "GGR", "GROSS", "RENDIMENTO"]):
                 is_entrada_dom = True
-
-        # Aplica o FILTRO DE TELA, para esconder o que o utilizador não quer ver
-        if "Pagar" in modo_conciliacao and is_entrada_dom: continue
-        if "Receber" in modo_conciliacao and not is_entrada_dom: continue
 
         match_found = False
         for i, doc in enumerate(todas_transacoes_pdf):
@@ -1591,10 +1588,6 @@ if excel_file and receipt_files:
     for i, doc in enumerate(todas_transacoes_pdf):
         if i not in ids_pdf_usados:
             is_credito_pdf = doc.get('Is_Credito', False)
-            
-            # Filtro visual para as sobras do Extrato
-            if "Pagar" in modo_conciliacao and is_credito_pdf: continue
-            if "Receber" in modo_conciliacao and not is_credito_pdf: continue
             
             b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
             
