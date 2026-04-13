@@ -103,6 +103,11 @@ def formatar_codigo_nome(codigo, nome):
     if not cod_str or cod_str in ['9999', '99', 'nan', '-']: return str(nome)
     return f"{cod_str} - {nome}"
 
+def normalizar_espacos(texto):
+    """Remove espaços duplos e garante formatação perfeita para o Match do Dicionário"""
+    if not isinstance(texto, str): return ""
+    return " ".join(texto.upper().split())
+
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
     transacoes = []
     banco_base = ""
@@ -122,7 +127,6 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                     texto_pagina = page.extract_text()
                     if not texto_pagina: continue
                     
-                    # AGRUPAMENTO DE LINHAS PARA EXTRATOS COMPLEXOS
                     linhas_originais = texto_pagina.split('\n')
                     linhas_agrupadas = []
                     linha_temp = ""
@@ -139,6 +143,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                         
                         if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
+                        # Identifica se é Entrada de Dinheiro (Crédito na Conta Bancária)
                         is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
                         
                         if any(t in linha_upper for t in termos_ignorar if t): continue
@@ -171,9 +176,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                 if not transacoes:
                     texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
                     texto_upper = texto_completo.upper()
-                    
                     is_credito_doc = any(x in texto_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
-                    
                     rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
                     datas = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto_completo)))
                     valores = re.findall(r'(\d[\d\.]*,\d{2})', texto_completo)
@@ -210,6 +213,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                 linha_upper = linha.upper()
                 
                 if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
+                
                 is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"])
                 
                 if any(t in linha_upper for t in termos_ignorar if t): continue
@@ -1432,8 +1436,8 @@ BANCO_DE_DADOS_EMPRESAS = {
 }
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V33.1")
-st.markdown("Extratos em Excel e Identificação Automática de Entradas/Saídas (Livre de Filtros Manuais).")
+st.title("🏦 Conciliador Contábil IA V35.0")
+st.markdown("Extratos em Excel e Inteligência Contábil Real (Débitos/Créditos Automáticos).")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1443,6 +1447,16 @@ with st.sidebar:
     )
     
     config_atual = BANCO_DE_DADOS_EMPRESAS[empresa_selecionada]
+    
+    st.divider()
+    st.header("🎯 Natureza da Conciliação")
+    modo_conciliacao = st.radio(
+        "Filtrar ecrã para:", 
+        ["Contas a Pagar (Apenas Débitos/Vermelho)", 
+         "Contas a Receber (Apenas Créditos/Verde)", 
+         "Ambos (Extrato Completo)"],
+        index=0
+    )
     
     st.divider()
     st.header("⚙️ Parâmetros")
@@ -1505,6 +1519,9 @@ if excel_file and receipt_files:
         with st.spinner(f"A processar {f.name}..."):
             todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar))
 
+    # === NORMALIZAÇÃO EXTREMA DO DICIONÁRIO DE FORNECEDORES ===
+    mapa_forn_norm = {normalizar_espacos(k): str(v) for k, v in mapa_fornecedores.items()}
+
     rows, ids_pdf_usados = [], set()
     for idx, l in df_dom.iterrows():
         v_ex = abs(limpar_valor(l[c_v]))
@@ -1521,6 +1538,7 @@ if excel_file and receipt_files:
         is_entrada_dom = False
         if c_cfop and not pd.isna(l[c_cfop]):
             cfop_str = str(l[c_cfop]).strip()
+            # CFOPs 5,6,7 = Saídas de NFs (Vendas = Entrada de Dinheiro)
             if cfop_str.startswith(('5', '6', '7')): is_entrada_dom = True
         else:
             fav_txt = str(l.get(c_cli, '')).upper()
@@ -1546,31 +1564,41 @@ if excel_file and receipt_files:
                         fav_final = str(l.get(c_cli, '')).upper()
                         if fav_final == "NAN" or not fav_final: fav_final = doc['Fav']
                         
-                        fav_final_clean = fav_final.strip()
-                        conta_debito = '9999'
-                        nome_debito = 'FORNECEDOR DIVERSOS'
+                        fav_final_clean = normalizar_espacos(fav_final)
+                        conta_contrapartida = '9999'
+                        nome_contrapartida = 'CLIENTE DIVERSOS' if is_entrada_dom else 'FORNECEDOR DIVERSOS'
                         
                         if regra_imp['nome'] != '-':
-                            conta_debito = regra_imp['conta']
-                            nome_debito = regra_imp['nome']
+                            conta_contrapartida = regra_imp['conta']
+                            nome_contrapartida = regra_imp['nome']
                         else:
-                            if fav_final_clean in mapa_fornecedores:
-                                conta_debito = mapa_fornecedores[fav_final_clean]
-                                nome_debito = fav_final_clean
+                            if fav_final_clean in mapa_forn_norm:
+                                conta_contrapartida = mapa_forn_norm[fav_final_clean]
+                                nome_contrapartida = fav_final_clean
                             else:
-                                for f_nome, f_conta in mapa_fornecedores.items():
+                                for f_nome, f_conta in mapa_forn_norm.items():
                                     if f_nome in fav_final_clean or fav_final_clean in f_nome:
-                                        conta_debito = f_conta
-                                        nome_debito = f_nome
+                                        conta_contrapartida = f_conta
+                                        nome_contrapartida = f_nome
                                         break
                                         
                         str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
-                        str_favorecido = formatar_codigo_nome(conta_debito, fav_final)
-                        str_debito = formatar_codigo_nome(conta_debito, nome_debito)
-                        str_credito = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
+                        str_favorecido = formatar_codigo_nome(conta_contrapartida, fav_final)
+                        
+                        # --- A GRANDE CORREÇÃO CONTÁBIL (DÉBITO E CRÉDITO DINÂMICOS) ---
+                        str_banco = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
+                        str_contrapartida = formatar_codigo_nome(conta_contrapartida, nome_contrapartida)
 
-                        val_entrada = v_ex if is_entrada_dom else 0.0
-                        val_saida = v_ex if not is_entrada_dom else 0.0
+                        if is_entrada_dom: # É uma ENTRADA de dinheiro
+                            str_debito = str_banco           # Banco Aumenta (Débito)
+                            str_credito = str_contrapartida  # Cliente/Receita (Crédito)
+                            val_entrada = v_ex
+                            val_saida = 0.0
+                        else:              # É uma SAÍDA de dinheiro
+                            str_debito = str_contrapartida   # Fornecedor/Despesa (Débito)
+                            str_credito = str_banco          # Banco Diminui (Crédito)
+                            val_entrada = 0.0
+                            val_saida = v_ex
 
                         rows.append({
                             'Status': '✅ CONCILIADO', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
@@ -1585,6 +1613,10 @@ if excel_file and receipt_files:
             if match_found: break
             
         if not match_found:
+            # Filtro visual para a tela
+            if "Pagar" in modo_conciliacao and is_entrada_dom: continue
+            if "Receber" in modo_conciliacao and not is_entrada_dom: continue
+            
             val_entrada = v_ex if is_entrada_dom else 0.0
             val_saida = v_ex if not is_entrada_dom else 0.0
                 
@@ -1601,34 +1633,49 @@ if excel_file and receipt_files:
         if i not in ids_pdf_usados:
             is_credito_pdf = doc.get('Is_Credito', False)
             
+            # Filtro visual para a tela
+            if "Pagar" in modo_conciliacao and is_credito_pdf: continue
+            if "Receber" in modo_conciliacao and not is_credito_pdf: continue
+            
             b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
             
-            fav_pdf = doc['Fav'].strip()
-            conta_debito = '9999'
-            nome_debito = 'FORNECEDOR DIVERSOS'
+            fav_pdf = normalizar_espacos(doc['Fav'])
+            conta_contrapartida = '9999'
+            nome_contrapartida = 'CLIENTE DIVERSOS' if is_credito_pdf else 'FORNECEDOR DIVERSOS'
             
-            if fav_pdf in mapa_fornecedores:
-                conta_debito = mapa_fornecedores[fav_pdf]
-                nome_debito = fav_pdf
+            if fav_pdf in mapa_forn_norm:
+                conta_contrapartida = mapa_forn_norm[fav_pdf]
+                nome_contrapartida = fav_pdf
             else:
-                for f_nome, f_conta in mapa_fornecedores.items():
+                for f_nome, f_conta in mapa_forn_norm.items():
                     if f_nome in fav_pdf or fav_pdf in f_nome:
-                        conta_debito = f_conta
-                        nome_debito = f_nome
+                        conta_contrapartida = f_conta
+                        nome_contrapartida = f_nome
                         break
                         
             regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
             str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
             
-            val_entrada = doc['Total'] if is_credito_pdf else 0.0
-            val_saida = doc['Total'] if not is_credito_pdf else 0.0
+            str_banco = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
+            str_contrapartida = formatar_codigo_nome(conta_contrapartida, nome_contrapartida)
+
+            # Lógica Invertida correta
+            if is_credito_pdf:
+                str_debito = str_banco
+                str_credito = str_contrapartida
+                val_entrada = doc['Total']
+                val_saida = 0.0
+            else:
+                str_debito = str_contrapartida
+                str_credito = str_banco
+                val_entrada = 0.0
+                val_saida = doc['Total']
             
             rows.append({
                 'Status': '⚠️ Só no Extrato', 'Data PDF': doc['Data'][0], 'Nota': '-',
                 'Valor Total': doc['Total'], 'Entradas': val_entrada, 'Saídas': val_saida,
-                'Imposto': str_imposto, 'Favorecido': formatar_codigo_nome(conta_debito, fav_pdf), 
-                'Banco': b_inf['nome'], 'Débito': formatar_codigo_nome(conta_debito, nome_debito), 
-                'Crédito': formatar_codigo_nome(b_inf['reduzido'], b_inf['nome']), 'Arquivo': doc['Arq']
+                'Imposto': str_imposto, 'Favorecido': formatar_codigo_nome(conta_contrapartida, fav_pdf), 
+                'Banco': b_inf['nome'], 'Débito': str_debito, 'Crédito': str_credito, 'Arquivo': doc['Arq']
             })
 
     res_df = pd.DataFrame(rows).fillna("-")
