@@ -156,8 +156,17 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
         
     elif file.name.lower().endswith((".xlsx", ".xls", ".csv")):
         try:
-            if file.name.lower().endswith('.csv'): df_ext = pd.read_csv(file, engine='python')
-            else: df_ext = pd.read_excel(file)
+            if file.name.lower().endswith('.csv'):
+                try:
+                    df_ext = pd.read_csv(file, sep=';', encoding='utf-8-sig')
+                    if len(df_ext.columns) < 2:
+                        file.seek(0)
+                        df_ext = pd.read_csv(file, sep=',', encoding='utf-8-sig')
+                except:
+                    file.seek(0)
+                    df_ext = pd.read_csv(file, engine='python')
+            else: 
+                df_ext = pd.read_excel(file)
             
             for index, row in df_ext.iterrows():
                 linha_parts = [str(v) for v in row.values if not pd.isna(v)]
@@ -1728,6 +1737,13 @@ if excel_file and receipt_files:
         lote_atual += 1
         
     df_dominio_export = pd.DataFrame(linhas_dominio)
+    
+    # Previne erros caso a tabela fique vazia com o filtro
+    if not df_dominio_export.empty:
+        csv_string = df_dominio_export.to_csv(sep=';', index=False)
+        csv_bytes = csv_string.encode('iso-8859-1', errors='replace')
+    else:
+        csv_bytes = "Não existem dados com este filtro.".encode('utf-8')
         
     nome_arquivo_csv = f"Importacao_Dominio_{empresa_selecionada.split()[0].upper()}.csv"
 
