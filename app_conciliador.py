@@ -74,10 +74,10 @@ def normalizar_espacos(texto):
     return " ".join(texto.upper().split())
 
 def formatar_codigo_nome(codigo, nome):
-    """Junta o código contábil ao nome."""
+    """Junta o código contábil ao nome. Mostra sempre o código, mesmo se for 9999."""
     cod_str = str(codigo).strip()
     if cod_str.endswith('.0'): cod_str = cod_str[:-2]
-    if not cod_str or cod_str in ['9999', '99', 'nan', '-']: return str(nome)
+    if not cod_str or cod_str in ['nan', 'None', '-']: return str(nome)
     return f"{cod_str} - {nome}"
 
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
@@ -206,9 +206,10 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
 def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     linhas = []
     
-    def extrair_conta(texto):
+    def extrair_conta_limpa(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
-        return m.group(1) if m else "9999" 
+        cod = m.group(1) if m else ""
+        return "" if cod == "9999" else cod
     
     df_valido = df_conciliado[df_conciliado['Valor Total'].apply(limpar_valor) > 0].copy()
     
@@ -238,8 +239,8 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
         val = limpar_valor(row['Valor Total'])
         if val <= 0: continue
         
-        cod_deb = extrair_conta(row['Débito'])
-        cod_cred = extrair_conta(row['Crédito'])
+        cod_deb = extrair_conta_limpa(row['Débito'])
+        cod_cred = extrair_conta_limpa(row['Crédito'])
         
         data_lanc = row['Data Excel'] if row['Data Excel'] != '-' else row['Data PDF']
         try:
@@ -264,7 +265,7 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     return "\r\n".join(linhas) + "\r\n"
 
 # ==========================================
-# 🧠 BANCO DE DADOS INTEGRADO (TOTALMENTE RESTAURADO)
+# 🧠 BANCO DE DADOS INTEGRADO
 # ==========================================
 BANCO_DE_DADOS_EMPRESAS_INICIAL = {
     "SELECT OPERATIONS S.A.": {
@@ -1168,8 +1169,8 @@ if 'empresas_db' not in st.session_state:
     st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V48.0")
-st.markdown("Blindagem Total e Base de Dados 100% Restaurada.")
+st.title("🏦 Conciliador Contábil")
+st.markdown("Automatização por IA.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1304,10 +1305,20 @@ if excel_file and receipt_files:
             st.error(f"❌ ERRO CRÍTICO: Não foi possível localizar as colunas de 'Data' e 'Valor' no ficheiro. Colunas lidas: {', '.join(df_dom.columns)}")
             st.stop()
             
+        # Robô Autodidata (Busca Inteligente da Coluna de Código)
         c_cod_cli = None
-        if c_cli in df_dom.columns:
+        for c in df_dom.columns:
+            cl = str(c).lower()
+            if any(x in cl for x in ["cód", "cod", "conta"]) and any(x in cl for x in ["fornecedor", "cliente", "reduz", "contábil"]):
+                c_cod_cli = c
+                break
+                
+        if not c_cod_cli and c_cli in df_dom.columns:
             idx_cli = df_dom.columns.get_loc(c_cli)
-            if idx_cli > 0: c_cod_cli = df_dom.columns[idx_cli - 1]
+            if idx_cli > 0: 
+                col_ant = df_dom.columns[idx_cli - 1]
+                if any(x in str(col_ant).lower() for x in ["cód", "cod", "conta"]):
+                    c_cod_cli = col_ant
         
         df_dom = df_dom.reset_index(drop=True)
     except Exception as e:
@@ -1527,7 +1538,8 @@ if excel_file and receipt_files:
     # 2. CSV (Domínio Novo)
     def extrair_conta_limpa(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
-        return m.group(1) if m else ""
+        cod = m.group(1) if m else ""
+        return "" if cod == "9999" else cod
 
     df_valido = df_export[df_export['Valor Total'].apply(limpar_valor) > 0].copy()
     linhas_dominio = []
