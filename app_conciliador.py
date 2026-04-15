@@ -1335,8 +1335,8 @@ if 'empresas_db' not in st.session_state:
     st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V47.0")
-st.markdown("Blindagem Total contra ficheiros sem colunas padrão.")
+st.title("🏦 Conciliador Contábil")
+st.markdown("Automatização por IA.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
