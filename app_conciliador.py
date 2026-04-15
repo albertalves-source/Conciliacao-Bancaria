@@ -259,7 +259,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
             st.warning(f"Não foi possível ler o Extrato em Excel '{file.name}': {e}")
             
     return transacoes
-
+    
 # ==========================================
 # 🧠 BANCO DE DADOS INTEGRADO (Livre de Duplicados)
 # ==========================================
@@ -1450,7 +1450,7 @@ BANCO_DE_DADOS_EMPRESAS = {
 
 # --- INTERFACE ---
 st.title("🏦 Conciliador Contábil")
-st.markdown("Extratos em Excel e Robô Autodidata (Aprende Códigos do Domínio).")
+st.markdown("Extratos em Excel.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1514,13 +1514,35 @@ if excel_file and receipt_files:
             df_dom = pd.read_csv(excel_file, engine='python')
             df_dom = df_dom.dropna(how='all', axis=1)
         else:
-            df_dom = pd.read_excel(excel_file)
+            # --- O SCANNER DE CABEÇALHO (RAIO-X PARA EXCEL DIRETO DO DOMÍNIO) ---
+            df_dom = None
+            for pular in range(20):
+                try:
+                    excel_file.seek(0)
+                    temp_df = pd.read_excel(excel_file, skiprows=pular)
+                    temp_cols = [str(c).lower().strip() for c in temp_df.columns]
+                    # Verifica se encontrou as colunas corretas ignorando o lixo do topo
+                    if any("data" in c or "dt" in c for c in temp_cols) and any("valor" in c or "vlr" in c for c in temp_cols):
+                        df_dom = temp_df
+                        break
+                except Exception:
+                    pass
             
+            if df_dom is None:
+                excel_file.seek(0)
+                df_dom = pd.read_excel(excel_file)
+                
         df_dom.columns = [str(c).replace('\n', ' ').strip() for c in df_dom.columns]
         df_dom = df_dom[~df_dom.astype(str).apply(lambda x: x.str.contains('Total Acumulador', case=False, na=False)).any(axis=1)]
         
-        c_d = next((c for c in df_dom.columns if "data" in c.lower()), None)
+        c_d = next((c for c in df_dom.columns if "data" in c.lower() or "dt" in c.lower()), None)
         c_v = next((c for c in df_dom.columns if "valor" in c.lower() and "cont" in c.lower()), next((c for c in df_dom.columns if "valor" in c.lower() or "vlr" in c.lower()), None))
+        
+        # --- TRAVA DE SEGURANÇA SE AINDA ASSIM NÃO ENCONTRAR COLUNAS ---
+        if c_d is None or c_v is None:
+            st.error("❌ ERRO CRÍTICO: Não foi possível localizar as colunas 'Data' e 'Valor' no ficheiro do Domínio. Peça ao colaborador para enviar um ficheiro com cabeçalho válido.")
+            st.stop()
+            
         c_cli = next((c for c in df_dom.columns if any(x in c.lower() for x in ["fornecedor", "cliente", "nome"])), "Fornecedor")
         c_nota = next((c for c in df_dom.columns if any(x in c.lower() for x in ["nota", "doc", "núm", "num"])), None)
         c_cfop = next((c for c in df_dom.columns if "cfop" in str(c).lower()), None)
@@ -1530,7 +1552,7 @@ if excel_file and receipt_files:
         if c_cli in df_dom.columns:
             idx_cli = df_dom.columns.get_loc(c_cli)
             if idx_cli > 0:
-                c_cod_cli = df_dom.columns[idx_cli - 1] # Geralmente a coluna de código vem mesmo antes do nome
+                c_cod_cli = df_dom.columns[idx_cli - 1]
         
         df_dom = df_dom.reset_index(drop=True)
     except Exception as e:
@@ -1544,7 +1566,6 @@ if excel_file and receipt_files:
     # --- NORMALIZAÇÃO E APRENDIZAGEM AUTOMÁTICA ---
     mapa_forn_norm = {normalizar_espacos(k): str(v) for k, v in mapa_fornecedores.items()}
     
-    # O Robô aprende todos os fornecedores diretamente do seu Excel do Domínio!
     if c_cli and c_cod_cli:
         for _, l in df_dom.iterrows():
             nome_dom = str(l[c_cli]).upper().strip()
@@ -1564,7 +1585,6 @@ if excel_file and receipt_files:
         nota_ex = str(nota_val).replace('.0', '') if str(nota_val).endswith('.0') else str(nota_val)
         if nota_ex == "nan": nota_ex = "-"
         
-        # Puxa o código do Excel para o Fornecedor atual
         codigo_excel = ""
         if c_cod_cli and not pd.isna(l[c_cod_cli]):
             codigo_excel = str(l[c_cod_cli]).replace('.0', '').strip()
@@ -1598,25 +1618,20 @@ if excel_file and receipt_files:
                         
                         fav_final_clean = normalizar_espacos(fav_final)
                         conta_contrapartida = '9999'
-                        nome_contrapartida = 'CLIENTE DIVERSOS' if is_entrada_dom else 'FORNECEDOR DIVERSOS'
+                        nome_contrapartida = fav_final # Nome real intacto
                         
                         if regra_imp['nome'] != '-':
                             conta_contrapartida = regra_imp['conta']
                             nome_contrapartida = regra_imp['nome']
                         else:
-                            # 1º Tenta usar o código que já veio no próprio Excel!
                             if codigo_excel:
                                 conta_contrapartida = codigo_excel
-                                nome_contrapartida = fav_final
-                            # 2º Tenta usar o dicionário super-treinado
                             elif fav_final_clean in mapa_forn_norm:
                                 conta_contrapartida = mapa_forn_norm[fav_final_clean]
-                                nome_contrapartida = fav_final_clean
                             else:
                                 for f_nome, f_conta in mapa_forn_norm.items():
                                     if f_nome in fav_final_clean or fav_final_clean in f_nome:
                                         conta_contrapartida = f_conta
-                                        nome_contrapartida = f_nome
                                         break
                                         
                         str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
@@ -1654,11 +1669,13 @@ if excel_file and receipt_files:
             
             val_entrada = v_ex if is_entrada_dom else 0.0
             val_saida = v_ex if not is_entrada_dom else 0.0
-                
+            
+            fav_cli = str(l.get(c_cli, '')).upper()
+            
             rows.append({
                 'Status': '❌ Só no Domínio', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
                 'Valor Total': v_ex, 'Entradas': val_entrada, 'Saídas': val_saida,
-                'Imposto': '-', 'Favorecido': formatar_codigo_nome(codigo_excel, str(l.get(c_cli, '')).upper()), 'Data PDF': '-',
+                'Imposto': '-', 'Favorecido': formatar_codigo_nome(codigo_excel if codigo_excel else '9999', fav_cli), 'Data PDF': '-',
                 'Banco': '-', 'Débito': '-', 'Crédito': '-', 
                 'Principal': '-', 'Multa': '-', 'Juros': '-',
                 'Cód. Receita': '-', 'Arquivo': '-'
@@ -1675,17 +1692,14 @@ if excel_file and receipt_files:
             
             fav_pdf = normalizar_espacos(doc['Fav'])
             conta_contrapartida = '9999'
-            nome_contrapartida = 'CLIENTE DIVERSOS' if is_credito_pdf else 'FORNECEDOR DIVERSOS'
+            nome_contrapartida = doc['Fav'] # Nome real intacto
             
-            # O Robô agora usa a memória que extraiu do Excel para tentar identificar as sobras do Extrato!
             if fav_pdf in mapa_forn_norm:
                 conta_contrapartida = mapa_forn_norm[fav_pdf]
-                nome_contrapartida = doc['Fav']
             else:
                 for f_nome, f_conta in mapa_forn_norm.items():
                     if f_nome in fav_pdf or fav_pdf in f_nome:
                         conta_contrapartida = f_conta
-                        nome_contrapartida = doc['Fav']
                         break
                         
             regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
