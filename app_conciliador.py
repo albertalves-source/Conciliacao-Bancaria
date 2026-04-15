@@ -1900,12 +1900,13 @@ if excel_file and receipt_files:
         
     df_dominio_export = pd.DataFrame(linhas_dominio)
     
-    # Exporta para CSV com delimitador de ponto e vírgula
-    csv_buffer = df_dominio_export.to_csv(sep=';', index=False, encoding='utf-8-sig')
+    # Exporta para CSV e converte para bytes com encoding ISO-8859-1 (padrão Windows/Domínio para acentos)
+    csv_string = df_dominio_export.to_csv(sep=';', index=False)
+    csv_bytes = csv_string.encode('iso-8859-1', errors='replace')
     nome_arquivo_csv = f"Importacao_Dominio_{empresa_selecionada.split()[0].upper()}.csv"
 
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
         st.download_button("📄 Baixar Arquivo Domínio (TXT)", txt_bytes, nome_arquivo_txt, mime="text/plain")
     with col_dl2:
-        st.download_button("🚀 Baixar Arquivo Domínio (CSV)", csv_buffer, nome_arquivo_csv, mime="text/csv")
+        st.download_button("🚀 Baixar Arquivo Domínio (CSV)", csv_bytes, nome_arquivo_csv, mime="text/csv")
