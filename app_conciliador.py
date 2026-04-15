@@ -77,7 +77,7 @@ def formatar_codigo_nome(codigo, nome):
     """Junta o código contábil ao nome. Mostra sempre o código, mesmo se for 9999."""
     cod_str = str(codigo).strip()
     if cod_str.endswith('.0'): cod_str = cod_str[:-2]
-    if not cod_str or cod_str in ['nan', 'None', '-']: return str(nome)
+    if not cod_str or cod_str in ['nan', 'None', '-', '0']: return f"9999 - {nome}"
     return f"{cod_str} - {nome}"
 
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
@@ -208,11 +208,11 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     
     def extrair_conta_limpa(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
-        cod = m.group(1) if m else ""
-        return "" if cod == "9999" else cod
+        cod = m.group(1) if m else "9999"
+        if cod == "0" or cod == "00": return "9999"
+        return cod
     
     df_valido = df_conciliado[df_conciliado['Valor Total'].apply(limpar_valor) > 0].copy()
-    
     if df_valido.empty: return ""
     
     datas_todas = []
@@ -265,13 +265,13 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     return "\r\n".join(linhas) + "\r\n"
 
 # ==========================================
-# 🧠 BANCO DE DADOS INTEGRADO
+# 🧠 BANCO DE DADOS INTEGRADO (CÓDIGOS 4 DÍGITOS REAIS)
 # ==========================================
 BANCO_DE_DADOS_EMPRESAS_INICIAL = {
     "SELECT OPERATIONS S.A.": {
         "codigo_dominio": "324",
         "cnpj": "56.875.122/0001-86",
-        "codigo_matriz_filial": "1",
+        "codigo_matriz_filial": "", 
         "impostos": {
             '0561': {'n': 'IRRF A RECOLHER', 'c': '178'}, 
             '2172': {'n': 'COFINS A RECOLHER', 'c': '180'}, 
@@ -291,6 +291,71 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'GATWAY BETVIP': {'n': 'Gatway API BETVIP', 'r': '1085'}
         },
         "fornecedores": {
+            'CONNECTPSP DESENVOLVEDORA': '374',
+            'CONNECTPSP': '374',
+            'UNIFICAPAY SERVICOS': '1774',
+            'UNIFICAPAY': '1774',
+            'DOM ASSESSORIA': '1358',
+            'PAGLIVRE SOLUCOES': '1786',
+            'PAGLIVRE': '1786',
+            'SELECT OPERATIONS LTDA': '5',
+            'SELECT OPERATIONS': '1052',
+            'ACG INSTITUICAO': '536',
+            'ISS': '173',
+            'AVANT EXPANSAO': '1188',
+            'JOAO MARCOS': '1577',
+            'GABRIELLA': '1822',
+            'DUCAMPELO PARTICIPACOES': '1837',
+            'DUCAMPELO': '1837',
+            'LEAME SOMA': '1784',
+            'BRAFIN SOLUCOES': '1412',
+            'REDESPARK TECNOLOGIA': '1676',
+            'SARA': '1853',
+            'EDUARDO': '1418',
+            'ARLEQUIM': '1516',
+            'INTERNATIONAL BET': '1840',
+            'DIEGO': '1314',
+            'SIDNEY': '1854',
+            'JOAO WESLEY': '1841',
+            'DOMINIQUE LIMA': '5',
+            'VALENTIM SOLUCOES': '1186',
+            'PYERRE SAYMON': '1187',
+            'ERICA MAXIMO': '1838',
+            'BRASIL CONSULTORIA': '1634',
+            'LEGITIMUZ': '1183',
+            'JUST NOW': '1884',
+            'MAILINBOX COMUNICACOES': '1673',
+            'PUBLICIDADE PROMOCAO': '1647',
+            'GUILHERME ESTEVES': '1640',
+            'BUZZCRAFT DIGITAL': '1409',
+            'MARCELO': '1518',
+            'MATHEUS CASTRO': '1887',
+            'CACTUS TECNOLOGIA': '1880',
+            'OBVIO': '1604',
+            'YGOR EDUARDO': '1804',
+            'SINGLE SOFTWARE': '1449',
+            'GBM INFO': '1185',
+            'COMERCIO SERVICO': '5',
+            'BETCONNECT INTERNET': '1717',
+            'FOMENTO PUBLICIDADE': '1637',
+            'JHONATHAN': '1883',
+            'SENDWORK SERVICOS': '1530',
+            'EZEQUIEL WANDERLEY': '1839',
+            'MOVE COMPANY': '1675',
+            'GAMIFY TECH': '1503',
+            'LEANDRO PEREIRA': '1885',
+            'GEG SOLUCOES': '1881',
+            'SELECT BET': '1889',
+            'C13 ENTRETENIMENTO': '1850',
+            'ANDRE': '1775',
+            '573 470': '1849',
+            'TRAFEGAR MIDIAS': '1333',
+            'GUSTAVO': '1882',
+            'LUCAS PAULO': '1886',
+            'VITOR': '1890',
+            'MMK NEGOCIOS': '1888',
+            'AFFILIATESDIGITAL LTDA': '1879',
+            'VORTIX CORE': '1722',
             'FORNECEDORES DIVERSOS': '1126',
             'DECOLA OPERATIONS N.V.': '1083',
             'KAYQUE DA SILVA LOPES': '1402',
@@ -328,7 +393,6 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'BETVIP - WATILA': '1178',
             'MUSICA VIVA LTDA': '1221',
             'TELEATENDIMENTO (BRASGAMING)': '1222',
-            'CACTUS TECNOLOGIA': '1223',
             'REY VAQUEIRO': '1224',
             'IMPUSEMAX MARKETING': '1225',
             'YARA TCHE': '1226',
@@ -341,7 +405,7 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'X7 ASSESSORIA': '1235',
             'JOSE EDSON VIEIRA DOS SANTOS': '1236',
             'DR SERVIÇOS LTDA': '1243',
-            'LEGITIMUZ TECNOLOGIA LTDA': '1372',
+            'LEGITIMUZ TECNOLOGIA LTDA': '1183',
             'TALKING & GAMING LTDA': '1261',
             'JOSE FRANCISCO DA SILVA JUNIOR': '1262',
             'LUCAS DANTAS PONTES': '1263',
@@ -385,7 +449,7 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'GABRIEL ALMEIDA RADICA DA SILVA': '1302',
             'DIEGO C. DOS SANTOS COMERCIO': '1303',
             'RAFAEL DIEGO KREHNKE GONCALVES': '1304',
-            'AVANT EXPANSAO DE FRANQUIAS LTDA': '1312',
+            'AVANT EXPANSAO DE FRANQUIAS LTDA': '1188',
             'DANTAS CM & AM LTDA': '1313',
             'TAISSUKE LOCACOES LTDA': '1557',
             'JOYO TECNOLOGIA BRASIL LTDA.': '1315',
@@ -394,7 +458,7 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'AFILIAPIX SOLUCOES EM MARKETING E TECNOLOGIA LTDA': '1318',
             'CHECKMATE MARKETING DIGITAL LTDA': '1319',
             'STEPHANY DOS SANTOS REIS': '1320',
-            'BRAFIN SOLUCOES, INTERMEDIACAO E PAGAMENTOS LTDA': '1321',
+            'BRAFIN SOLUCOES, INTERMEDIACAO E PAGAMENTOS LTDA': '1412',
             'CAMPOS EMPREENDIMENTOS E TECNOLOGIA LTDA': '1322',
             'DOM - ASSESSORIA ESPORTIVA E EMPRESARIAL LTDA': '1323',
             'FLUE AGENCIA DIGITAL LTDA': '1324',
@@ -576,16 +640,15 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'POWERED BRASIL': '1876',
             'RAYANE FERNANDES SANTANA': '1877',
             'ROMARIO RODRIGUES': '1878',
-            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '474',
-            'DIEGO HENRIQUE SANTOS DE SANTANA': '47',
+            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '1840',
+            'DIEGO HENRIQUE SANTOS DE SANTANA': '1314',
             'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '383',
-            '60.692.475 SIDNEY ALVES CORREIA JUNIOR': '490',
+            '60.692.475 SIDNEY ALVES CORREIA JUNIOR': '1854',
             '65.227.051 LUIZ HENRIQUE DOS SANTOS GONZAGA': '494',
-            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '425',
-            'DUCAMPELO PARTICIPACOES LTDA': '476',
-            '64.438.924 GABRIELLA BORGES ROCHA': '477',
-            'LEGITIMUZ TECNOLOGIA LTDA': '1372',
-            'UNIFICAPAY SERVICOS FINANCEIROS E DE PAGAMENTOS LTDA': '760', 
+            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '1786',
+            'DUCAMPELO PARTICIPACOES LTDA': '1837',
+            '64.438.924 GABRIELLA BORGES ROCHA': '1822',
+            'UNIFICAPAY SERVICOS FINANCEIROS E DE PAGAMENTOS LTDA': '1774', 
             'AM PUBLICIDADE E PROMOCAO DE VENDAS LTDA': '1250' 
         }
     },
@@ -1169,8 +1232,8 @@ if 'empresas_db' not in st.session_state:
     st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil")
-st.markdown("Automatização por IA.")
+st.title("🏦 Conciliador Contábil IA V53.0")
+st.markdown("Plano de Contas Blindado: 100% Imune a Erros do Excel.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1304,21 +1367,6 @@ if excel_file and receipt_files:
         if not c_d or not c_v:
             st.error(f"❌ ERRO CRÍTICO: Não foi possível localizar as colunas de 'Data' e 'Valor' no ficheiro. Colunas lidas: {', '.join(df_dom.columns)}")
             st.stop()
-            
-        # Robô Autodidata (Busca Inteligente da Coluna de Código)
-        c_cod_cli = None
-        for c in df_dom.columns:
-            cl = str(c).lower()
-            if any(x in cl for x in ["cód", "cod", "conta"]) and any(x in cl for x in ["fornecedor", "cliente", "reduz", "contábil"]):
-                c_cod_cli = c
-                break
-                
-        if not c_cod_cli and c_cli in df_dom.columns:
-            idx_cli = df_dom.columns.get_loc(c_cli)
-            if idx_cli > 0: 
-                col_ant = df_dom.columns[idx_cli - 1]
-                if any(x in str(col_ant).lower() for x in ["cód", "cod", "conta"]):
-                    c_cod_cli = col_ant
         
         df_dom = df_dom.reset_index(drop=True)
     except Exception as e:
@@ -1330,13 +1378,6 @@ if excel_file and receipt_files:
             todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar))
 
     mapa_forn_norm = {normalizar_espacos(k): str(v) for k, v in mapa_fornecedores.items()}
-    
-    if c_cli and c_cod_cli:
-        for _, l in df_dom.iterrows():
-            nome_dom = str(l.get(c_cli, '')).upper().strip() if c_cli else ""
-            cod_dom = str(l.get(c_cod_cli, '')).replace('.0', '').strip() if c_cod_cli else ""
-            if nome_dom and nome_dom != 'NAN' and cod_dom and cod_dom != 'NAN' and cod_dom != 'NONE':
-                mapa_forn_norm[normalizar_espacos(nome_dom)] = cod_dom
 
     rows, ids_pdf_usados = [], set()
     
@@ -1352,11 +1393,6 @@ if excel_file and receipt_files:
                 nota_val = int(nota_val)
             nota_ex = str(nota_val).replace('.0', '') if str(nota_val).endswith('.0') else str(nota_val)
             if nota_ex == "nan": nota_ex = "-"
-            
-            codigo_excel = ""
-            if c_cod_cli and not pd.isna(l.get(c_cod_cli, None)):
-                codigo_excel = str(l[c_cod_cli]).replace('.0', '').strip()
-                if codigo_excel == "nan" or codigo_excel == "None": codigo_excel = ""
             
             is_entrada_dom = False
             if c_cfop and not pd.isna(l.get(c_cfop, None)):
@@ -1392,9 +1428,7 @@ if excel_file and receipt_files:
                                 conta_contrapartida = regra_imp['conta']
                                 nome_contrapartida = regra_imp['nome']
                             else:
-                                if codigo_excel:
-                                    conta_contrapartida = codigo_excel
-                                elif fav_final_clean in mapa_forn_norm:
+                                if fav_final_clean in mapa_forn_norm:
                                     conta_contrapartida = mapa_forn_norm[fav_final_clean]
                                 else:
                                     for f_nome, f_conta in mapa_forn_norm.items():
@@ -1442,7 +1476,7 @@ if excel_file and receipt_files:
                 rows.append({
                     'Status': '❌ Só no Domínio', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
                     'Valor Total': v_ex, 'Entradas': val_entrada, 'Saídas': val_saida,
-                    'Imposto': '-', 'Favorecido': formatar_codigo_nome(codigo_excel if codigo_excel else '9999', fav_cli), 'Data PDF': '-',
+                    'Imposto': '-', 'Favorecido': formatar_codigo_nome('9999', fav_cli), 'Data PDF': '-',
                     'Banco': '-', 'Débito': '-', 'Crédito': '-', 
                     'Principal': '-', 'Multa': '-', 'Juros': '-',
                     'Cód. Receita': '-', 'Arquivo': '-'
@@ -1510,7 +1544,7 @@ if excel_file and receipt_files:
     st.dataframe(styled, use_container_width=True)
     
     # ---------------------------------------------------------
-    # EXPORTAÇÃO COM FILTROS DE STATUS
+    # EXPORTAÇÃO COM FILTROS DE STATUS E BLINDAGEM DE CÓDIGOS
     # ---------------------------------------------------------
     st.divider()
     st.header("📥 Opções de Exportação")
@@ -1535,11 +1569,12 @@ if excel_file and receipt_files:
     nome_arquivo_txt = f"Importacao_Dominio_{empresa_selecionada.split()[0].upper()}.txt"
     txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
 
-    # 2. CSV (Domínio Novo)
+    # 2. CSV (Domínio Novo) - Blindado contra contas vazias ou com "0"
     def extrair_conta_limpa(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
-        cod = m.group(1) if m else ""
-        return "" if cod == "9999" else cod
+        cod = m.group(1) if m else "9999"
+        if cod == "0" or cod == "00": return "9999"
+        return cod
 
     df_valido = df_export[df_export['Valor Total'].apply(limpar_valor) > 0].copy()
     linhas_dominio = []
