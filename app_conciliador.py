@@ -1728,13 +1728,6 @@ if excel_file and receipt_files:
         lote_atual += 1
         
     df_dominio_export = pd.DataFrame(linhas_dominio)
-    
-    # Previne erros caso a tabela fique vazia com o filtro
-    if not df_dominio_export.empty:
-        csv_string = df_dominio_export.to_csv(sep=';', index=False)
-        csv_bytes = csv_string.encode('iso-8859-1', errors='replace')
-    else:
-        csv_bytes = b"Não existem dados com este filtro."
         
     nome_arquivo_csv = f"Importacao_Dominio_{empresa_selecionada.split()[0].upper()}.csv"
 
