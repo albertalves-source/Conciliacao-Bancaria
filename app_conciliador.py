@@ -265,7 +265,7 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     return "\r\n".join(linhas) + "\r\n"
 
 # ==========================================
-# 🧠 BANCO DE DADOS INTEGRADO (CÓDIGOS 4 DÍGITOS REAIS)
+# 🧠 BANCO DE DADOS INTEGRADO (CÓDIGOS 4 DÍGITOS REAIS E BLINDADOS)
 # ==========================================
 BANCO_DE_DADOS_EMPRESAS_INICIAL = {
     "SELECT OPERATIONS S.A.": {
@@ -405,7 +405,6 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'X7 ASSESSORIA': '1235',
             'JOSE EDSON VIEIRA DOS SANTOS': '1236',
             'DR SERVIÇOS LTDA': '1243',
-            'LEGITIMUZ TECNOLOGIA LTDA': '1183',
             'TALKING & GAMING LTDA': '1261',
             'JOSE FRANCISCO DA SILVA JUNIOR': '1262',
             'LUCAS DANTAS PONTES': '1263',
@@ -449,7 +448,6 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'GABRIEL ALMEIDA RADICA DA SILVA': '1302',
             'DIEGO C. DOS SANTOS COMERCIO': '1303',
             'RAFAEL DIEGO KREHNKE GONCALVES': '1304',
-            'AVANT EXPANSAO DE FRANQUIAS LTDA': '1188',
             'DANTAS CM & AM LTDA': '1313',
             'TAISSUKE LOCACOES LTDA': '1557',
             'JOYO TECNOLOGIA BRASIL LTDA.': '1315',
@@ -458,9 +456,7 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'AFILIAPIX SOLUCOES EM MARKETING E TECNOLOGIA LTDA': '1318',
             'CHECKMATE MARKETING DIGITAL LTDA': '1319',
             'STEPHANY DOS SANTOS REIS': '1320',
-            'BRAFIN SOLUCOES, INTERMEDIACAO E PAGAMENTOS LTDA': '1412',
             'CAMPOS EMPREENDIMENTOS E TECNOLOGIA LTDA': '1322',
-            'DOM - ASSESSORIA ESPORTIVA E EMPRESARIAL LTDA': '1323',
             'FLUE AGENCIA DIGITAL LTDA': '1324',
             'GABRIELLY FERNANDA BORGES DA LUZ': '1325',
             'GABRIEL ADEMAR CRAVEIRO DA CUNHA': '1326',
@@ -470,7 +466,6 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'MURILO DA SILVA PITA': '1330',
             'VITOR MAGNO F SALES PUBLICIDADE': '1331',
             'PVT 1 EDITORA LTDA': '1332',
-            'TRAFEGAR MIDIAS LTDA': '1333',
             'VIRTUALCOB PROCESSAMENTO DE DADOS LTDA': '1334',
             'JOÃO VICTOR GOMES COUTINHO': '1559',
             'ROMUALDO DE FARIAS SILVA FILHO': '1336',
@@ -642,12 +637,13 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'ROMARIO RODRIGUES': '1878',
             'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '1840',
             'DIEGO HENRIQUE SANTOS DE SANTANA': '1314',
-            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '383',
+            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '9999',
             '60.692.475 SIDNEY ALVES CORREIA JUNIOR': '1854',
-            '65.227.051 LUIZ HENRIQUE DOS SANTOS GONZAGA': '494',
+            '65.227.051 LUIZ HENRIQUE DOS SANTOS GONZAGA': '1852',
             'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '1786',
             'DUCAMPELO PARTICIPACOES LTDA': '1837',
             '64.438.924 GABRIELLA BORGES ROCHA': '1822',
+            'LEGITIMUZ TECNOLOGIA LTDA': '1183',
             'UNIFICAPAY SERVICOS FINANCEIROS E DE PAGAMENTOS LTDA': '1774', 
             'AM PUBLICIDADE E PROMOCAO DE VENDAS LTDA': '1250' 
         }
@@ -1232,7 +1228,7 @@ if 'empresas_db' not in st.session_state:
     st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V53.0")
+st.title("🏦 Conciliador Contábil IA V54.0")
 st.markdown("Plano de Contas Blindado: 100% Imune a Erros do Excel.")
 
 with st.sidebar:
@@ -1473,10 +1469,20 @@ if excel_file and receipt_files:
                 val_saida = v_ex if not is_entrada_dom else 0.0
                 fav_cli = str(l.get(c_cli, '')).upper() if c_cli else ""
                 
+                fav_cli_clean = normalizar_espacos(fav_cli)
+                conta_pendente = '9999'
+                if fav_cli_clean in mapa_forn_norm:
+                    conta_pendente = mapa_forn_norm[fav_cli_clean]
+                else:
+                    for f_nome, f_conta in mapa_forn_norm.items():
+                        if f_nome in fav_cli_clean or fav_cli_clean in f_nome:
+                            conta_pendente = f_conta
+                            break
+                
                 rows.append({
                     'Status': '❌ Só no Domínio', 'Data Excel': d_ex_obj.strftime('%d/%m/%Y'), 'Nota': nota_ex,
                     'Valor Total': v_ex, 'Entradas': val_entrada, 'Saídas': val_saida,
-                    'Imposto': '-', 'Favorecido': formatar_codigo_nome('9999', fav_cli), 'Data PDF': '-',
+                    'Imposto': '-', 'Favorecido': formatar_codigo_nome(conta_pendente, fav_cli), 'Data PDF': '-',
                     'Banco': '-', 'Débito': '-', 'Crédito': '-', 
                     'Principal': '-', 'Multa': '-', 'Juros': '-',
                     'Cód. Receita': '-', 'Arquivo': '-'
