@@ -68,45 +68,17 @@ def converter_data_dominio(data_obj):
         if match: return datetime.strptime(match.group(1), '%d/%m/%Y').date()
         return None
 
-def limpar_nome_contabil(nome):
-    """Limpeza Suprema: Destrói qualquer ID técnico e limpa fantasmas."""
-    if not nome or str(nome).lower() in ["n/a", "nan", "0", "none"]: return ""
-    n = str(nome).upper()
-    n = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', n)
-    n = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', n) 
-    n = n.replace('R$', '').replace('$', '').replace('DE R', '')
-    
-    termos_bancarios = [
-        "PIX ENVIADO PARA:", "PIX RECEBIDO PAGADOR:", "PIX ENVIADO PARA", "PIX RECEBIDO",
-        "TRANSFERENCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA:", "TRANSFERÊNCIA ENVIADA PARA", 
-        "TRANSFERENCIA RECEBIDA PAGADOR:", "TRANSFERÊNCIA RECEBIDA PAGADOR:", "TRANSFERÊNCIA RECEBIDA",
-        "TED ENVIADA PARA:", "TED ENVIADA PARA", "TED RECEBIDA", 
-        "DEVOLUÇÃO DE PIX ENVIADO (DESFAZIMENTO)", "DEVOLUCAO DE PIX ENVIADO (DESFAZIMENTO)",
-        "DEVOLUÇÃO DE PIX ENVIADO", "DESFAZIMENTO", 
-        "PAGADOR:", "BENEFICIARIO:", "RAZAO SOCIAL:", "FAVORECIDO:", "VALOR PAGO", "DATA DO PAGAMENTO", 
-        "PAGAMENTO DE BOLETO", "BOLETO", "PAYMENT", "SALDO DISPONÍVEL", "SALDO DISPONIVEL", "COMPROVANTE FISCAL", "COMPROVANTE", "SALDO"
-    ]
-    for t in termos_bancarios:
-        n = n.replace(t, '')
-        
-    n = re.sub(r'[\.\-\/\,:\(\)_]', ' ', n)
-    palavras = [w for w in n.split() if len(w) > 1]
-    resultado = ' '.join(palavras).strip()
-    
-    if not resultado or resultado in ["DE", "DA", "DO", "PARA", "EM"]: return ""
-    return resultado
-
-def formatar_codigo_nome(codigo, nome):
-    """Junta o código contábil ao nome (Ex: 587 - Conta Simples). Limpa zeros residuais."""
-    cod_str = str(codigo).strip()
-    if cod_str.endswith('.0'): cod_str = cod_str[:-2]
-    if not cod_str or cod_str in ['9999', '99', 'nan', '-']: return str(nome)
-    return f"{cod_str} - {nome}"
-
 def normalizar_espacos(texto):
     """Remove espaços duplos e garante formatação perfeita para o Match do Dicionário"""
     if not isinstance(texto, str): return ""
     return " ".join(texto.upper().split())
+
+def formatar_codigo_nome(codigo, nome):
+    """Junta o código contábil ao nome."""
+    cod_str = str(codigo).strip()
+    if cod_str.endswith('.0'): cod_str = cod_str[:-2]
+    if not cod_str or cod_str in ['9999', '99', 'nan', '-']: return str(nome)
+    return f"{cod_str} - {nome}"
 
 def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
     transacoes = []
@@ -127,7 +99,6 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                     texto_pagina = page.extract_text()
                     if not texto_pagina: continue
                     
-                    # AGRUPAMENTO DE LINHAS PARA EXTRATOS COMPLEXOS
                     linhas_originais = texto_pagina.split('\n')
                     linhas_agrupadas = []
                     linha_temp = ""
@@ -141,31 +112,34 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                     
                     for linha in linhas_agrupadas:
                         linha_upper = linha.upper()
-                        
                         if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
                         
-                        # Regra estrita: Se tiver "ENVIAD", "PAGAMENTO" ou "-" é Saída. Se tiver "RECEBID", "CRÉDITO" é Entrada.
                         is_credito = False
                         if any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"]):
                             is_credito = True
                         if any(x in linha_upper for x in ["ENVIAD", "PAGAMENTO", "PAGTO", "SAQUE", "COMPRA", "DEBITO", "DÉBITO"]):
-                            is_credito = False # Prioriza Saídas se houver palavras ambíguas
+                            is_credito = False 
                             
                         if any(t in linha_upper for t in termos_ignorar if t): continue
                         
                         data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
-                        valor_match = re.findall(r'(\d[\d\.]*,\d{2})', linha)
+                        valor_match = re.findall(r'(?:R\$\s*)?-?\d{1,3}(?:\.\d{3})*,\d{2}\b', linha)
                         
                         if data_match and valor_match:
                             desc_bruta = linha.replace(data_match.group(1), "")
                             for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
                             
-                            nome_limpo = limpar_nome_contabil(desc_bruta)
+                            # Limpeza Básica
+                            nome_limpo = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', desc_bruta.upper())
+                            nome_limpo = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', nome_limpo)
+                            for t in ["PIX ENVIADO PARA:", "PIX RECEBIDO PAGADOR:", "TRANSFERÊNCIA ENVIADA PARA:", "TRANSFERÊNCIA RECEBIDA PAGADOR:"]:
+                                nome_limpo = nome_limpo.replace(t, '')
+                            nome_limpo = normalizar_espacos(nome_limpo)
+                            
                             if not nome_limpo: continue
 
                             cod_found = ""
-                            codes = re.findall(r'\b(\d{4})\b', linha)
-                            for c in codes:
+                            for c in re.findall(r'\b(\d{4})\b', linha):
                                 if c in mapa_imp: cod_found = c; break
                             
                             for v_txt in valor_match:
@@ -178,87 +152,114 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
                                         'Principal': val, 'Multa': 0.0, 'Juros': 0.0,
                                         'Is_Credito': is_credito
                                     })
-                if not transacoes:
-                    texto_completo = "\n".join([p.extract_text() or "" for p in pdf.pages])
-                    texto_upper = texto_completo.upper()
-                    
-                    is_credito_doc = False
-                    if any(x in texto_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"]):
-                        is_credito_doc = True
-                    
-                    rec = re.search(r'(?:RECEITA|CODIGO|RECEITA:)\s*(\d{4})', texto_completo, re.IGNORECASE)
-                    datas = list(set(re.findall(r'(\d{2}/\d{2}/\d{4})', texto_completo)))
-                    valores = re.findall(r'(\d[\d\.]*,\d{2})', texto_completo)
-                    if datas and valores:
-                        v_f = abs(limpar_valor(valores[-1]))
-                        transacoes.append({
-                            'Data': datas, 'Total': v_f, 'Cod': rec.group(1) if rec else "",
-                            'Banc': banco_base, 'Fav': "COMPROVANTE FISCAL",
-                            'IA': False, 'Arq': file.name, 'Principal': v_f, 'Multa': 0.0, 'Juros': 0.0,
-                            'Is_Credito': is_credito_doc
-                        })
         except: pass
         
-    # === LÓGICA MÁGICA PARA EXCEL/CSV COMO EXTRATO ===
     elif file.name.lower().endswith((".xlsx", ".xls", ".csv")):
         try:
-            if file.name.lower().endswith('.csv'):
-                df_ext = pd.read_csv(file, engine='python')
-            else:
-                df_ext = pd.read_excel(file)
+            if file.name.lower().endswith('.csv'): df_ext = pd.read_csv(file, engine='python')
+            else: df_ext = pd.read_excel(file)
             
             for index, row in df_ext.iterrows():
-                linha_parts = []
-                for val in row.values:
-                    if pd.isna(val): continue
-                    if isinstance(val, (int, float)):
-                        linha_parts.append(f"{val:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
-                    elif hasattr(val, 'strftime'):
-                        linha_parts.append(val.strftime('%d/%m/%Y'))
-                    else:
-                        linha_parts.append(str(val))
+                linha_parts = [str(v) for v in row.values if not pd.isna(v)]
+                linha = " ".join(linha_parts).upper()
                 
-                linha = " ".join(linha_parts)
-                linha_upper = linha.upper()
+                if any(x in linha for x in ["SALDO", "RESUMO", "DISPONÍVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
+                is_credito = True if any(x in linha for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "DEPÓSITO"]) else False
+                if any(x in linha for x in ["ENVIAD", "PAGAMENTO", "SAQUE", "DEBITO"]): is_credito = False
                 
-                if any(x in linha_upper for x in ["SALDO", "RESUMO", "DISPONÍVEL", "DISPONIVEL", "VALOR TOTAL", "TOTAL ACUMULADOR", "SALDO EM"]): continue
-                
-                is_credito = False
-                if any(x in linha_upper for x in ["RECEBID", "DEVOLU", "DESFAZIMENTO", "ESTORNO", "RESSARCIMENTO", "CREDITO", "CRÉDITO", "DEPÓSITO", "DEPOSITO"]):
-                    is_credito = True
-                if any(x in linha_upper for x in ["ENVIAD", "PAGAMENTO", "PAGTO", "SAQUE", "COMPRA", "DEBITO", "DÉBITO"]):
-                    is_credito = False
-                
-                if any(t in linha_upper for t in termos_ignorar if t): continue
+                if any(t in linha for t in termos_ignorar if t): continue
                 
                 data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
-                valor_match = re.findall(r'(\d[\d\.]*,\d{2})', linha)
+                valor_match = re.findall(r'(?:R\$\s*)?-?\d{1,3}(?:\.\d{3})*,\d{2}\b', linha)
                 
                 if data_match and valor_match:
-                    desc_bruta = linha.replace(data_match.group(1), "")
-                    for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
-                    nome_limpo = limpar_nome_contabil(desc_bruta)
+                    desc = linha.replace(data_match.group(1), "")
+                    for v_txt in valor_match: desc = desc.replace(v_txt, "")
+                    nome_limpo = normalizar_espacos(desc)
                     if not nome_limpo: continue
 
-                    cod_found = ""
-                    codes = re.findall(r'\b(\d{4})\b', linha)
-                    for c in codes:
-                        if c in mapa_imp: cod_found = c; break
+                    cod_found = next((c for c in re.findall(r'\b(\d{4})\b', linha) if c in mapa_imp), "")
                     
                     for v_txt in valor_match:
                         val = abs(limpar_valor(v_txt))
                         if val > 0:
                             transacoes.append({
-                                'Data': [data_match.group(1)], 'Total': val,
-                                'Cod': cod_found, 'Fav': nome_limpo, 
+                                'Data': [data_match.group(1)], 'Total': val, 'Cod': cod_found, 'Fav': nome_limpo, 
                                 'Banc': banco_base, 'IA': False, 'Arq': file.name,
-                                'Principal': val, 'Multa': 0.0, 'Juros': 0.0,
-                                'Is_Credito': is_credito
+                                'Principal': val, 'Multa': 0.0, 'Juros': 0.0, 'Is_Credito': is_credito
                             })
         except Exception as e:
-            st.warning(f"Não foi possível ler o Extrato em Excel '{file.name}': {e}")
+            st.warning(f"Erro ao ler '{file.name}': {e}")
             
     return transacoes
+
+# --- EXPORTAÇÃO TXT (FORMATO EXATO DO DOMÍNIO) ---
+def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
+    linhas = []
+    
+    # Extrair contas ignorando a parte do texto (Ex: de "1107 - Delfinance" extrai "1107")
+    def extrair_conta(texto):
+        m = re.search(r'^(\d+)', str(texto).strip())
+        return m.group(1) if m else "9999" # 9999 é conta de Alerta se falhar
+    
+    # Processar apenas as linhas com valor financeiro
+    df_valido = df_conciliado[df_conciliado['Valor Total'].apply(limpar_valor) > 0].copy()
+    
+    # Descobrir data mínima e máxima para o cabeçalho
+    datas_todas = []
+    for d in df_valido['Data Excel']:
+        if str(d) != '-': datas_todas.append(d)
+    for d in df_valido['Data PDF']:
+        if str(d) != '-': datas_todas.append(d)
+        
+    datas_parsed = pd.to_datetime(datas_todas, format='%d/%m/%Y', errors='coerce').dropna()
+    if not datas_parsed.empty:
+        dt_ini = datas_parsed.min().strftime('%d/%m/%Y')
+        dt_fim = datas_parsed.max().strftime('%d/%m/%Y')
+    else:
+        dt_ini = datetime.now().strftime('%d/%m/%Y')
+        dt_fim = dt_ini
+
+    # LINHA 01 - CABEÇALHO DO LOTE
+    empresa_pad = str(cod_empresa).zfill(7)
+    cnpj_pad = re.sub(r'\D', '', str(cnpj_empresa)).zfill(14)
+    linha01 = f"01{empresa_pad}{cnpj_pad}{dt_ini}{dt_fim}N0500000117"
+    linhas.append(linha01)
+    
+    seq = 1
+    for idx, row in df_valido.iterrows():
+        val = limpar_valor(row['Valor Total'])
+        if val <= 0: continue
+        
+        cod_deb = extrair_conta(row['Débito'])
+        cod_cred = extrair_conta(row['Crédito'])
+        
+        data_lanc = row['Data Excel'] if row['Data Excel'] != '-' else row['Data PDF']
+        try:
+            data_str = datetime.strptime(str(data_lanc), '%d/%m/%Y').strftime('%d/%m/%Y')
+        except:
+            data_str = dt_ini
+            
+        favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
+        if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
+        
+        # LINHA 02 - CABEÇALHO DO LANÇAMENTO
+        linha02 = f"02{str(seq).zfill(7)}X{data_str}".ljust(150)
+        linhas.append(linha02)
+        seq += 1
+        
+        # LINHA 03 - PARTIDAS DOBRADAS E HISTÓRICO
+        v_str = str(int(round(val * 100))).zfill(14) # Ex: 68.32 vira 00000000006832
+        hist_pad = favorecido.upper()[:250].ljust(250)
+        linha03 = f"03{str(seq).zfill(7)}{cod_deb.zfill(7)}{cod_cred.zfill(7)}{v_str}        {hist_pad}0000000"
+        linhas.append(linha03)
+        seq += 1
+        
+    # LINHA 99 - FECHO (100 Noves)
+    linhas.append("9" * 100)
+    
+    # O Domínio Sistemas prefere encode ANSI/ISO-8859-1 para evitar problemas com acentos do Windows
+    return "\r\n".join(linhas) + "\r\n"
     
 # ==========================================
 # 🧠 BANCO DE DADOS INTEGRADO (Livre de Duplicados)
@@ -1447,19 +1448,50 @@ BANCO_DE_DADOS_EMPRESAS = {
         "fornecedores": {}
     }
 }
+# Inicializa o Banco de Dados em Memória (Para adicionar novas empresas ao vivo)
+if 'empresas_db' not in st.session_state:
+    st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil")
-st.markdown("Extratos em Excel.")
+st.title("🏦 Conciliador Contábil IA V41.0")
+st.markdown("Integração Total com **Domínio Sistemas** (Exportação TXT) e Gestão de Empresas.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
+    
+    # --- SISTEMA PARA ADICIONAR NOVA EMPRESA ---
+    with st.expander("➕ Adicionar Nova Empresa"):
+        nova_emp = st.text_input("Nome da Nova Empresa:")
+        if st.button("Gravar Empresa") and nova_emp:
+            if nova_emp not in st.session_state['empresas_db']:
+                st.session_state['empresas_db'][nova_emp] = {
+                    "codigo_dominio": "0000",
+                    "cnpj": "00.000.000/0000-00",
+                    "impostos": {'0561': {'n': 'IRRF Padrão', 'c': '9999'}}, 
+                    "bancos": {'BANCO': {'n': 'Banco Padrão', 'r': '9999'}},
+                    "fornecedores": {}
+                }
+                st.success(f"'{nova_emp}' registada com sucesso!")
+                st.rerun()
+            else:
+                st.warning("Esta empresa já existe!")
+
     empresa_selecionada = st.selectbox(
         "Selecione a base de dados ativa:", 
-        list(BANCO_DE_DADOS_EMPRESAS.keys())
+        list(st.session_state['empresas_db'].keys())
     )
     
-    config_atual = BANCO_DE_DADOS_EMPRESAS[empresa_selecionada]
+    config_atual = st.session_state['empresas_db'][empresa_selecionada]
+    
+    st.divider()
+    st.header("⚙️ Configuração Domínio TXT")
+    st.markdown("<small>Os dados abaixo irão no cabeçalho do ficheiro .txt gerado para importação no Domínio.</small>", unsafe_allow_html=True)
+    cod_dominio = st.text_input("Cód. Empresa no Domínio (Ex: 324):", config_atual.get("codigo_dominio", "0000"))
+    cnpj_empresa = st.text_input("CNPJ da Empresa:", config_atual.get("cnpj", "00.000.000/0000-00"))
+    
+    # Atualiza os dados na sessão
+    st.session_state['empresas_db'][empresa_selecionada]['codigo_dominio'] = cod_dominio
+    st.session_state['empresas_db'][empresa_selecionada]['cnpj'] = cnpj_empresa
     
     st.divider()
     st.header("🎯 Natureza da Conciliação")
@@ -1473,12 +1505,8 @@ with st.sidebar:
     
     st.divider()
     st.header("⚙️ Parâmetros")
-    ignorar_data = st.checkbox("Ignorar Limite de Datas", value=False, help="Se marcado, o robô cruza APENAS pelo valor exato, independentemente do dia.")
-    
-    if not ignorar_data:
-        tolerancia_dias = st.slider("Tolerância de Datas (dias):", 0, 60, 7)
-    else:
-        tolerancia_dias = 99999 # Número gigante para anular a barreira de dias
+    ignorar_data = st.checkbox("Ignorar Limite de Datas", value=False, help="Cruza apenas pelo valor.")
+    tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Datas (dias):", 0, 60, 7)
     
     st.divider()
     st.header("🚫 Filtro de Extrato")
@@ -1501,9 +1529,6 @@ with st.sidebar:
 
     mapa_fornecedores = config_atual["fornecedores"]
     
-    st.divider()
-    st.success(f"✅ Códigos atualizados de acordo com os CSVs de **{empresa_selecionada}**")
-
 c1, c2 = st.columns(2)
 with c1: excel_file = st.file_uploader("📂 Relatório Domínio (Excel/CSV)", type=["xlsx", "xls", "csv"])
 with c2: receipt_files = st.file_uploader("📄 PDFs e Extratos Excel/CSV", type=["pdf", "png", "jpg", "xlsx", "xls", "csv"], accept_multiple_files=True)
@@ -1514,20 +1539,18 @@ if excel_file and receipt_files:
             df_dom = pd.read_csv(excel_file, engine='python')
             df_dom = df_dom.dropna(how='all', axis=1)
         else:
-            # --- O SCANNER DE CABEÇALHO (RAIO-X PARA EXCEL DIRETO DO DOMÍNIO) ---
+            # SCANNER DE CABEÇALHO
             df_dom = None
             for pular in range(20):
                 try:
                     excel_file.seek(0)
                     temp_df = pd.read_excel(excel_file, skiprows=pular)
                     temp_cols = [str(c).lower().strip() for c in temp_df.columns]
-                    # Verifica se encontrou as colunas corretas ignorando o lixo do topo
                     if any("data" in c or "dt" in c for c in temp_cols) and any("valor" in c or "vlr" in c for c in temp_cols):
                         df_dom = temp_df
                         break
                 except Exception:
                     pass
-            
             if df_dom is None:
                 excel_file.seek(0)
                 df_dom = pd.read_excel(excel_file)
@@ -1538,21 +1561,19 @@ if excel_file and receipt_files:
         c_d = next((c for c in df_dom.columns if "data" in c.lower() or "dt" in c.lower()), None)
         c_v = next((c for c in df_dom.columns if "valor" in c.lower() and "cont" in c.lower()), next((c for c in df_dom.columns if "valor" in c.lower() or "vlr" in c.lower()), None))
         
-        # --- TRAVA DE SEGURANÇA SE AINDA ASSIM NÃO ENCONTRAR COLUNAS ---
         if c_d is None or c_v is None:
-            st.error("❌ ERRO CRÍTICO: Não foi possível localizar as colunas 'Data' e 'Valor' no ficheiro do Domínio. Peça ao colaborador para enviar um ficheiro com cabeçalho válido.")
+            st.error("❌ ERRO CRÍTICO: Não foi possível localizar as colunas 'Data' e 'Valor' no ficheiro do Domínio.")
             st.stop()
             
         c_cli = next((c for c in df_dom.columns if any(x in c.lower() for x in ["fornecedor", "cliente", "nome"])), "Fornecedor")
         c_nota = next((c for c in df_dom.columns if any(x in c.lower() for x in ["nota", "doc", "núm", "num"])), None)
         c_cfop = next((c for c in df_dom.columns if "cfop" in str(c).lower()), None)
         
-        # ROBÔ AUTODIDATA: Encontra a coluna de Código do Fornecedor no próprio Domínio
+        # ROBÔ AUTODIDATA
         c_cod_cli = None
         if c_cli in df_dom.columns:
             idx_cli = df_dom.columns.get_loc(c_cli)
-            if idx_cli > 0:
-                c_cod_cli = df_dom.columns[idx_cli - 1]
+            if idx_cli > 0: c_cod_cli = df_dom.columns[idx_cli - 1]
         
         df_dom = df_dom.reset_index(drop=True)
     except Exception as e:
@@ -1563,7 +1584,6 @@ if excel_file and receipt_files:
         with st.spinner(f"A processar {f.name}..."):
             todas_transacoes_pdf.extend(extrair_dados_arquivo(f, mapa_bancos, mapa_imp, True, termos_ignorar))
 
-    # --- NORMALIZAÇÃO E APRENDIZAGEM AUTOMÁTICA ---
     mapa_forn_norm = {normalizar_espacos(k): str(v) for k, v in mapa_fornecedores.items()}
     
     if c_cli and c_cod_cli:
@@ -1618,7 +1638,7 @@ if excel_file and receipt_files:
                         
                         fav_final_clean = normalizar_espacos(fav_final)
                         conta_contrapartida = '9999'
-                        nome_contrapartida = fav_final # Nome real intacto
+                        nome_contrapartida = fav_final 
                         
                         if regra_imp['nome'] != '-':
                             conta_contrapartida = regra_imp['conta']
@@ -1669,7 +1689,6 @@ if excel_file and receipt_files:
             
             val_entrada = v_ex if is_entrada_dom else 0.0
             val_saida = v_ex if not is_entrada_dom else 0.0
-            
             fav_cli = str(l.get(c_cli, '')).upper()
             
             rows.append({
@@ -1692,10 +1711,9 @@ if excel_file and receipt_files:
             
             fav_pdf = normalizar_espacos(doc['Fav'])
             conta_contrapartida = '9999'
-            nome_contrapartida = doc['Fav'] # Nome real intacto
+            nome_contrapartida = doc['Fav']
             
-            if fav_pdf in mapa_forn_norm:
-                conta_contrapartida = mapa_forn_norm[fav_pdf]
+            if fav_pdf in mapa_forn_norm: conta_contrapartida = mapa_forn_norm[fav_pdf]
             else:
                 for f_nome, f_conta in mapa_forn_norm.items():
                     if f_nome in fav_pdf or fav_pdf in f_nome:
@@ -1743,15 +1761,21 @@ if excel_file and receipt_files:
     styled = disp.style.map(color_status, subset=['Status']) if hasattr(disp.style, 'map') else disp.style.applymap(color_status, subset=['Status'])
     st.dataframe(styled, use_container_width=True)
     
+    # ---------------------------------------------------------
+    # EXPORTAÇÃO E DOWNLOAD DE ARQUIVOS (EXCEL E TXT DOMÍNIO)
+    # ---------------------------------------------------------
     out_excel = io.BytesIO()
     with pd.ExcelWriter(out_excel, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
     nome_arquivo_excel = f"conciliacao_{empresa_selecionada.split()[0].lower()}.xlsx"
 
-    out_txt = res_df.to_csv(sep='\t', index=False).encode('utf-8')
-    nome_arquivo_txt = f"conciliacao_{empresa_selecionada.split()[0].lower()}.txt"
+    # Gera o TXT do Domínio
+    txt_content = gerar_txt_dominio(res_df, cod_dominio, cnpj_empresa)
+    nome_arquivo_txt = f"LANCAMENTOS_{empresa_selecionada.split()[0].upper()}.txt"
+    # Codifica para ISO-8859-1 que é o padrão que o sistema Domínio geralmente gosta (substitui acentos estranhos)
+    txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
 
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
         st.download_button("📥 Baixar Excel", out_excel.getvalue(), nome_arquivo_excel)
     with col_dl2:
-        st.download_button("📄 Baixar TXT", out_txt, nome_arquivo_txt)
+        st.download_button("📄 Baixar TXT (Padrão Domínio)", txt_bytes, nome_arquivo_txt)
