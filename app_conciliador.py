@@ -193,40 +193,24 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
             
     return transacoes
 
-# --- EXPORTAÇÃO TXT (FORMATO EXATO DO DOMÍNIO) ---
-def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
+# --- EXPORTAÇÃO CSV FORMATO DOMÍNIO ---
+def gerar_csv_dominio(df_conciliado, lote_inicial):
+    """Gera um DataFrame com o padrão exato CSV/XLSX exigido pelo Domínio."""
     linhas = []
     
     # Extrair contas ignorando a parte do texto (Ex: de "1107 - Delfinance" extrai "1107")
     def extrair_conta(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
-        return m.group(1) if m else "9999" # 9999 é conta de Alerta se falhar
+        return m.group(1) if m else ""
     
-    # Processar apenas as linhas com valor financeiro
+    # Processar apenas as linhas com valor financeiro conciliadas e sobras
     df_valido = df_conciliado[df_conciliado['Valor Total'].apply(limpar_valor) > 0].copy()
     
-    # Descobrir data mínima e máxima para o cabeçalho
-    datas_todas = []
-    for d in df_valido['Data Excel']:
-        if str(d) != '-': datas_todas.append(d)
-    for d in df_valido['Data PDF']:
-        if str(d) != '-': datas_todas.append(d)
-        
-    datas_parsed = pd.to_datetime(datas_todas, format='%d/%m/%Y', errors='coerce').dropna()
-    if not datas_parsed.empty:
-        dt_ini = datas_parsed.min().strftime('%d/%m/%Y')
-        dt_fim = datas_parsed.max().strftime('%d/%m/%Y')
-    else:
-        dt_ini = datetime.now().strftime('%d/%m/%Y')
-        dt_fim = dt_ini
+    try:
+        lote_atual = int(lote_inicial)
+    except:
+        lote_atual = 890000
 
-    # LINHA 01 - CABEÇALHO DO LOTE
-    empresa_pad = str(cod_empresa).zfill(7)
-    cnpj_pad = re.sub(r'\D', '', str(cnpj_empresa)).zfill(14)
-    linha01 = f"01{empresa_pad}{cnpj_pad}{dt_ini}{dt_fim}N0500000117"
-    linhas.append(linha01)
-    
-    seq = 1
     for idx, row in df_valido.iterrows():
         val = limpar_valor(row['Valor Total'])
         if val <= 0: continue
@@ -238,33 +222,34 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
         try:
             data_str = datetime.strptime(str(data_lanc), '%d/%m/%Y').strftime('%d/%m/%Y')
         except:
-            data_str = dt_ini
+            data_str = str(data_lanc)
             
         favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
         if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
         
-        # LINHA 02 - CABEÇALHO DO LANÇAMENTO
-        linha02 = f"02{str(seq).zfill(7)}X{data_str}".ljust(150)
-        linhas.append(linha02)
-        seq += 1
+        # Converte o valor para o formato português com vírgula para o CSV
+        valor_formatado = f"{val:.2f}".replace('.', ',')
         
-        # LINHA 03 - PARTIDAS DOBRADAS E HISTÓRICO
-        v_str = str(int(round(val * 100))).zfill(14) # Ex: 68.32 vira 00000000006832
-        hist_pad = favorecido.upper()[:250].ljust(250)
-        linha03 = f"03{str(seq).zfill(7)}{cod_deb.zfill(7)}{cod_cred.zfill(7)}{v_str}        {hist_pad}0000000"
-        linhas.append(linha03)
-        seq += 1
+        linhas.append({
+            'Data': data_str,
+            'Cód. Conta Debito': cod_deb,
+            'Cód. Conta Credito': cod_cred,
+            'Valor': valor_formatado,
+            'Cód. Histórico': '',
+            'Complemento Histórico': favorecido.upper()[:250],
+            'Inicia Lote': lote_atual,
+            'Código Matriz/Filial': '',
+            'Centro de Custo Débito': '',
+            'Centro de Custo Crédito': ''
+        })
+        lote_atual += 1
         
-    # LINHA 99 - FECHO (100 Noves)
-    linhas.append("9" * 100)
-    
-    # O Domínio Sistemas prefere encode ANSI/ISO-8859-1 para evitar problemas com acentos do Windows
-    return "\r\n".join(linhas) + "\r\n"
-    
+    return pd.DataFrame(linhas)
+
 # ==========================================
-# 🧠 BANCO DE DADOS INTEGRADO (Livre de Duplicados)
+# 🧠 BANCO DE DADOS INTEGRADO
 # ==========================================
-BANCO_DE_DADOS_EMPRESAS = {
+BANCO_DE_DADOS_EMPRESAS_INICIAL = {
     "SELECT OPERATIONS S.A.": {
         "impostos": {
             '0561': {'n': 'IRRF A RECOLHER', 'c': '178'}, 
@@ -285,17 +270,6 @@ BANCO_DE_DADOS_EMPRESAS = {
             'GATWAY BETVIP': {'n': 'Gatway API BETVIP', 'r': '1085'}
         },
         "fornecedores": {
-            # === FORNECEDORES ORIGINAIS DA SELECT AQUI RESTAURADOS ===
-            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '474',
-            'DIEGO HENRIQUE SANTOS DE SANTANA': '47',
-            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '383',
-            '60.692.475 SIDNEY ALVES CORREIA JUNIOR': '490',
-            '65.227.051 LUIZ HENRIQUE DOS SANTOS GONZAGA': '494',
-            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '425',
-            'DUCAMPELO PARTICIPACOES LTDA': '476',
-            '64.438.924 GABRIELLA BORGES ROCHA': '477',
-            
-            # === RESTANTE DO PLANO DE CONTAS ===
             'FORNECEDORES DIVERSOS': '1126',
             'DECOLA OPERATIONS N.V.': '1083',
             'KAYQUE DA SILVA LOPES': '1402',
@@ -443,7 +417,7 @@ BANCO_DE_DADOS_EMPRESAS = {
             'AYLA PARTICIPAÇÕES': '1570',
             'CODING DESENVOLVIMENTO': '1571',
             'SINGLEBYTE DESENVOLVIMENTO': '1572',
-            'HOT LUZEIROS': '1573',
+            'HOTEL LUZEIROS': '1573',
             'DIGIMAX MARKETING': '1621',
             'FISH PUBLICIDADE': '1622',
             'FORMULA IMPORTAÇÕES': '1623',
@@ -581,7 +555,18 @@ BANCO_DE_DADOS_EMPRESAS = {
             'POWERED BRASIL': '1876',
             'RAYANE FERNANDES SANTANA': '1877',
             'ROMARIO RODRIGUES': '1878',
-            'PYERRE SAYMON DE MELO SILVA': '1513'
+            'PYERRE SAYMON DE MELO SILVA': '1513',
+            'INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA': '474',
+            'DIEGO HENRIQUE SANTOS DE SANTANA': '47',
+            'RT BRASIL CONSULTORIA E EMPREENDIMENTOS FINANCEIROS LTDA': '383',
+            '60.692.475 SIDNEY ALVES CORREIA JUNIOR': '490',
+            '65.227.051 LUIZ HENRIQUE DOS SANTOS GONZAGA': '494',
+            'PAGLIVRE SOLUCOES EM COBRANCA LTDA': '425',
+            'DUCAMPELO PARTICIPACOES LTDA': '476',
+            '64.438.924 GABRIELLA BORGES ROCHA': '477',
+            'LEGITIMUZ TECNOLOGIA LTDA': '1372',
+            'UNIFICAPAY SERVICOS FINANCEIROS E DE PAGAMENTOS LTDA': '760', 
+            'AM PUBLICIDADE E PROMOCAO DE VENDAS LTDA': '1250' 
         }
     },
     "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
@@ -600,635 +585,7 @@ BANCO_DE_DADOS_EMPRESAS = {
             'DELFIN FLABET': {'n': 'Delfinance Proprietaria - Flabet', 'r': '1111'},
             'DELFIN BET DA SORTE': {'n': 'Delfinance Proprietaria - Bet da Sorte', 'r': '1112'}
         },
-        "fornecedores": {
-            "Z3 PROPAGANDA LTDA": "1254",
-            "STAMPA OUTDOOR LTDA": "1260",
-            "BLACK BOX DIGITAL LTDA": "1261",
-            "EXPERT DIGITAL": "1262",
-            "ANA&ROSA EVENTOS ARTISTICOS LTDA": "1263",
-            "PONTO P - TECNOLOGIA E PAGAMENTOS LTDA": "1264",
-            "HI COMUNICA MARKETING LTDA": "1265",
-            "GS - TRAFEGO ORGANICO LTDA": "1266",
-            "GAMIFY TECH BRASIL LTDA": "1684",
-            "ADMASTERS SOLUCOES DE MARKETING DIGITAL LTDA": "1268",
-            "PEDALAR LOCACAO DE EQUIPAMENTOS DE LAZER LTDA": "1272",
-            "EUDSON HENRIQUE DE FREITAS": "1273",
-            "DANIEL FORTUNE DIGITAL MARKETING LTDA": "1274",
-            "FABIO C. SIMÕES - SIMÕES DIVULGAÇÕES LTDA": "1275",
-            "ACG ADM. DE CARTÕES": "1276",
-            "ASSOCIAÇÃO CENTENARIO DO SANTA CRUZ": "1277",
-            "SHORT CODE AUTOMACAO DE SERVICOS LTDA": "1278",
-            "PIX GAMING DIGITAL MARKETING LTDA": "1566",
-            "MP JORNALISMO E PROPAGANDA LTDA": "1280",
-            "DESENVOLVIMENTO LTDA": "1281",
-            "LOMA AGENCIA E MARKETING LTDA - PLAY ONLINE": "1282",
-            "SHOWS PRODUÇÃO": "1283",
-            "BHS BRINDES": "1284",
-            "TRAFEGAR MIDIAS": "1285",
-            "BEBERIBE MIDIA E COMUNICACAO LTDA": "1286",
-            "FIRSTSTEP CONSULTORIA": "1287",
-            "NEXUS TELECOM": "1288",
-            "ALL SPACE": "1289",
-            "BR CONSULTORIA ESPORTIVA LTDA": "1290",
-            "ANNE STEPHANINE PEREIRA DE AQUINO": "1291",
-            "GYNO DANIEL BEZERRA SILVA": "1292",
-            "1001 SERVIÇOS DIGITAIS EIRELI": "1293",
-            "ONIMIDIA SERVICOS DE MARKETING LTDA": "1294",
-            "MOVE COMPANY LTDA": "1295",
-            "MC4 PROMO MARKETING DIRETO LTDA": "1296",
-            "PRISCILA DE ARAUJO DORNELAS CAMARA": "1297",
-            "FR SOLUCOES EM MARKETING LTDA": "1298",
-            "TGF DIGITAL MARKETING LTDA": "1299",
-            "CARLOS VINICIUS SANTOS DE LIMA": "1300",
-            "JUARES PINTO DE ALENCAR": "1301",
-            "GABRIEL RIBEIRO CHAVES": "1302",
-            "CARLOS AUGUSTO AFONSO MOREIRA": "1303",
-            "SUELEN KARINE DA SILVA ROCHA": "1304",
-            "LUCAS MATHEUS MORAIS DE LIMA": "1305",
-            "GOMES CIA": "1306",
-            "ICARO FERNANDO DOS SANTOS PEREIRA": "1307",
-            "MARCO ANTONIO DE SOUZA BARBOSA": "1308",
-            "MARCOS VILLAS BOAS FRANCA": "1310",
-            "ARTUR TORRES DE MOURA FILHO": "1311",
-            "IMPERIO VERDE MARKETING DIGITAL LTDA": "1312",
-            "RADIO TRANSAMERICA DE RECIFE LTDA": "1313",
-            "VILLARIM MARQUES PUBLICIDADE LTDA": "1314",
-            "DNE - MIDIA LTDA": "1315",
-            "RZK DIGITAL MEDIA COMERCIALIZAÇÃO DE MIDIA LTDA": "1316",
-            "GABRIEL DA SILVA MARQUES": "1317",
-            "DBONE COMERCIO DE VESTUARIOS E ACESSORIOS LTDA": "1318",
-            "JULIO CESAR ALVES BRAGA": "1319",
-            "ANDRE LUIZ ALVES RIBEIRO": "1320",
-            "MARLLON LEVY OLIVEIRA SANTOS": "1321",
-            "HERBERT PERFEITO TRAMONTINI": "1322",
-            "GABRIELA LOHANA DE MELO PUBLICIDADE": "1323",
-            "JOAO LUCAS BARROS DE ALMEIDA": "1324",
-            "SADI & MORISHITA ADVOGADOS ASSOCIADOS": "1326",
-            "MATHEUS VICTOR DE OLIVEIRA SANTOS": "1327",
-            "FACIL TRANSFER COMERCIO DE CAMISAS LTDA": "1347",
-            "PG NEGOCIOS DIGITAIS": "1348",
-            "BIRO BRASIL SERVIÇOS DE IMPRESSÃO": "1349",
-            "LOPES EMPREENDIMENTOS DIGITAL": "1351",
-            "LEGITIMUZ TECNOLOGIA": "1352",
-            "RICK BANDEIRA PRODUÇÕES": "1353",
-            "LETICIA LUIZA MENDES": "1354",
-            "CD PUBLICIDADE E EVENTOS": "1355",
-            "ARRAIAL - ACADEMIA DO GOL FUTEBOL SOCIETY LTDA ME": "1356",
-            "DIOMAR TADEU DANTAS DE FARIAS - BRASGAMING": "1357",
-            "MABRE MARKETING LTDA": "1358",
-            "J.Q SERVIÇOS E CONSULTORIA LTDA": "1359",
-            "CHAILLINE AZEVEDO ALVES": "1360",
-            "DANYELLA DO NASCIMENTO ARCANJO": "1361",
-            "CENOCARVA LTDA": "1362",
-            "JW INFLUENDER LTDA": "1363",
-            "MARCOS DANIEL VALE": "1364",
-            "SMITH RYAJ COSTA DE SOUZA": "1365",
-            "ANDERSON DA SILVA VALENTIM": "1366",
-            "GABRIEL HENRIQUE GOMES DA SILVA": "1367",
-            "VRL AGENCIAMENTOS DE VIAGENS LTDA": "1368",
-            "IMPERIO DOS BALOES": "1369",
-            "OLIVEIRA PAZ LTDA": "1370",
-            "MASTER DIGITAL COMERCIO DE PRODUTOS ELETRONICOS": "1373",
-            "LDA E ESPORTS LTDA": "1376",
-            "RODRIGO IKE ENTERTAINMENT LTDA": "1379",
-            "DC DIGITAL LTDA": "1383",
-            "ELLEN JULIANA DO CARMO SALES COSTA": "1385",
-            "WDN ESPORTES LTDA": "1388",
-            "JENYFER SCHIMANSKI DA CRUZ": "1390",
-            "CLAUDIA COSTA FARIAS": "1392",
-            "SIMONE MACHADO PINTO ELLYAN": "1393",
-            "CARIJO COMUNICAÇÃO LTDA": "1395",
-            "IVAH MARKETING E GAMING LTDA - IURY ANDREI": "1397",
-            "CORREA CORREA COMUNICAÇÃO LTDA": "1400",
-            "THIAGO WILSON DA SILVEIRA": "1402",
-            "MP SERVIÇOS GRÁFICOS E PUBLICITÁRIOS": "1408",
-            "HUMBERTO CALABRIA FILHO": "1409",
-            "WILLYAN DE FRANCA SANTANA DOS SANTOS": "1410",
-            "N CONTEUDO DE MARKETING LTDA": "1415",
-            "WDT GRÁFICA E EDITORIA EIRELI": "1423",
-            "PEDRO HENRIQUE DE MATOS DIAS CHIANCA": "1424",
-            "PIXUO SERVICOS TECNOLOGICOS E COBRANCA LTDA": "1464",
-            "RALI NEGOCIOS DIGITAIS LTDA": "1614",
-            "I C DE LIMA NEGOCIOS DIGITAIS LTDA": "1615",
-            "GIULIA CIANDRINI DE MENDONCA CAMARA ARAUJO": "1616",
-            "FACEBOOK SERVICOS ONLINE DO BRASIL LTDA": "1681",
-            "ADRIANO DA CONCEICAO SOUZA": "1469",
-            "RECIFE TRACKER LTDA": "1620",
-            "GOOGLE BRASIL INTERNET LTDA": "1682",
-            "MARLON COUTO DE LIMA": "1472",
-            "LAURO MARCELO GUEDES MONTEIRO": "1622",
-            "VALERIA DE FARIA SILVA FERREIRA": "1623",
-            "CARLOS HENRIQUE ANDRADE DA SILVA": "1624",
-            "CARLOS APARECIDO TEODORA DE CARVALHO": "1625",
-            "VANESSA ALCANTARA TRAMONTINI": "1477",
-            "TIROSDECANTO MARKETING DIGITAL LTDA": "1626",
-            "RENATO DE JESUS BARBOSA LIMA": "1627",
-            "BB AFFILIATION AGENCIA DE PUBLICIDADE LTDA": "1480",
-            "IDEA LOCACAO DE ESTRUTURAS E ILUMINACAO LTDA": "1481",
-            "SARA BRANDAO SANTOS": "1628",
-            "RONALDO GUEDES DA SILVA": "1685",
-            "GABRIEL BORGES SOARES DA SILVA": "1630",
-            "DNC GESTAO E ANALISE DE DADOS LTDA": "1631",
-            "MARCELO AUGUSTO DA SILVA": "1632",
-            "IAN GUIMARAES HASTENREITER": "1633",
-            "DAVI DE F RODRIGUES": "1634",
-            "BRUNO ANDRE MORAIS DE LIMA": "1686",
-            "PROMOBEM ESPIRITO SANTO LTDA": "1636",
-            "MIRELLY DOS SANTOS FERNANDES": "1491",
-            "ANDRE LUIZ ALVES CORREIA": "1492",
-            "DUBLATEXTIL FABRICACAO DE TECIDOS LTDA": "1493",
-            "PROMOBEM SAO PAULO LTDA": "1637",
-            "PROMOBEM PERNAMBUCO LTDA": "1638",
-            "MAXIMILIANO MENEZES DE MELO": "1496",
-            "PROMOBEM GOIAS LTDA": "1639",
-            "MARLIO AVILA DE C NEVES JUNIOR": "1498",
-            "PROMOBEM PARA LTDA": "1640",
-            "ARES REPRESENTAÇÕES COMERCIAIS LTDA": "1500",
-            "SERGIO HACKER CORTE REAL": "1502",
-            "SILVANA F. DE LIMA FLORES - ME": "1505",
-            "PROMOBEM BAHIA LTDA": "1641",
-            "PROMOBEM AMAZONAS LTDA": "1642",
-            "PEDRO HENRIQUE SANCHES FERREIRA": "1508",
-            "RONIVAL SALES PEREIRA": "1509",
-            "PROMOBEM ALAGOAS LTDA": "1643",
-            "OTAVIO NASCIMENTO DE SOUZA": "1511",
-            "NILSON JOSE CARMO DA SILVA FILHO LTDA": "1644",
-            "MARCELLA WOILLE INOJOSA GALINDO SILVA": "1514",
-            "JOHN VICTOR BAI FRANCISCO": "1515",
-            "HOTBIZ LTDA": "1516",
-            "COMMINITY DIGITAL LTDA": "1517",
-            "FOMENTO PUBLICIDADE INDUSTRIES BRASIL LTDA": "1518",
-            "SR DRIVE EXPERIENCE LTDA": "1519",
-            "JOAO VICTOR AMORIM FREITAS": "1645",
-            "QXUTE LTDA": "1521",
-            "RAFAEL SILVERIO LEAL": "1523",
-            "RADIO JC FM LTDA": "1646",
-            "APX ENGAGE - DIGITAL SOLUTIONS LTDA": "1525",
-            "RADIO SOCIEDADE DA BAHIA SOCIEDADE ANONIMA": "1647",
-            "MAILINBOX COMUNICACOES LTDA": "1527",
-            "HM TECH LTDA": "1528",
-            "BRUNO AUGUSTO MACIEL ZAMBONI": "1687",
-            "THIAGO WILLIAMS BEZERRA ZILLINGER": "1532",
-            "TORRES GADELHA SOCIED. IND. DE ADVOCACIA": "1533",
-            "MILLENNIUM PNEUS LTDA": "1534",
-            "PB DIGITAL LTDA": "1649",
-            "MC_PUBLICIDADE E MARKETING LTDA": "1536",
-            "RAFAEL DE BARROS LIRA VASCONCELOS": "1650",
-            "PROCONECT LTDA": "1538",
-            "LUIZ ROCHA LELES JUNIOR": "1651",
-            "P L S A MARKETING DIGITAL LTDA": "1652",
-            "WAKE UP LTDA": "1656",
-            "SHAOLIN PRODUCOES LTDA": "1542",
-            "C. E. DA SILVA LTDA": "1657",
-            "DEJO DO BRASIL LTDA": "1544",
-            "SEU TITO BOTECO LTDA": "1688",
-            "ADVICE MULTIMIDIA SERVICOS E LOCACOES LTDA": "1658",
-            "AGENCIA LUCK VIAGENS E TURISMO LTDA": "1547",
-            "GRA VIOLA PRODUCOES ARTISTICAS LTDA": "1659",
-            "DCCONVERSION SERVICOS DIGITAIS LTDA": "1660",
-            "BETTER COLLECTIVE BRASIL LTDA": "1689",
-            "MOVEUP MEDIA BRAZIL LTDA": "1662",
-            "IVY PRODUCOES ARTISTICAS LTDA": "1663",
-            "SINGLE SOFTWARE SOLUCOES TECNOLOGIAS LTDA": "1666",
-            "SINOSSERRA PROMOTORA DE VENDAS E SERVICOS FINANCEIROS LTDA": "1690",
-            "BCMV COMUNICACAO E MARKETING LTDA": "1691",
-            "AILTON RICARDO MOREIRA GALDINO ME": "1692",
-            "RAFAELA OLIVEIRA CHRIZOSTOMO": "1693",
-            "GODAN30 LTDA": "1694",
-            "SACCA PUBLICIDADE E MERCHANDISING LTDA": "1695",
-            "EVERTON LUIS DA SILVA XAVIER": "1696",
-            "HC TURISMO LTDA": "1697",
-            "ERIVALDO DE ANDRADE FERREIRA": "1698",
-            "LET'S TURISMO LTDA": "1699",
-            "LUCAS DO ESPIRITO SANTOS SOUZA": "1700",
-            "CAROLINA R DE A CALABRIA EVENTOS LTDA": "1701",
-            "BENIGNO DA COSTA LEAO JUNIOR": "1702",
-            "MUNICIPIO DE CABEDELO": "1725",
-            "MAINSTREAM CONSULTORIA DE ESPORTES ELETRONICOS LTDA": "1731",
-            "MALT SERVICOS DE LIMPEZA LTDA": "1732",
-            "MOURA VIDROS LTDA": "1733",
-            "NORDESTE BRINDES E VARIEDADES LTDA": "1734",
-            "GBM INFO LTDA": "1735",
-            "IMAS BRASIL ARTIGOS RECREATIVOS LTDA": "1736",
-            "ANDERSON BITENCOURT DE JESUS": "1737",
-            "BAROJO COMERCIO E SERVICOS LTDA": "1791",
-            "L M LINK SOLUCOES EM TECNOLOGIA LTDA": "1740",
-            "BENU MEDIA LTDA": "1741",
-            "CS CONSTRUCOES LTDA": "1742",
-            "ANIMA BRINDES INDUSTRIA E COMERCIO LTDA": "1743",
-            "LSMC INTERMEDIACOES E SERVICOS DIGITAIS LTDA": "1744",
-            "FFA COMERCIO VAREJISTA DE MATERIAIS PROMOCIONAIS LTDA": "1745",
-            "METROPOLES PRODUCOES": "1746",
-            "MAZZEL ADVERTISING LTDA": "1747",
-            "MULLETS TECNOLOGIA LTDA": "1748",
-            "FLASH BALOES COMERCIO DE BALOES - LTDA": "1749",
-            "EQUIPE MOSAICO LTDA": "1750",
-            "M.C ASSOCIADOS LTDA": "1751",
-            "MARILZA ALBUQUERQUE FELIX": "1752",
-            "COMERCIAL SA IRMAOS LTDA": "1753",
-            "RECIFE TEXTIL": "1754",
-            "GREMIO RECREATIVO SOCIO CULTURAL EXPLOSAO INFERNO CORAL": "1766",
-            "CONNECTPSP DESENVOLVEDORA DE SISTEMA SA": "1772",
-            "W. B. DE OLIVEIRA LTDA": "1776",
-            "PATRICIA ROCHA RODRIGUES": "1777",
-            "MELIUZ S.A.": "1778",
-            "A B OLIVEIRA TRANSPORTE LOCAÇÃO LTDA": "1779",
-            "GF SOLUCOES LTDA": "1780",
-            "MAIOR DO NORDESTE BRINDES E VARIEDADES LTDA": "1781",
-            "INVESTBET LTDA.": "1782",
-            "ANNA PAULA DOS SANTOS SILVA 05035506479": "1783",
-            "VINICIUS ROBERTO LIMA": "1784",
-            "ANTONIO MARCIO DE SANTANA": "1785",
-            "MARCUS VINICIUS GUEDES AMBROZIO": "1786",
-            "EKKO COPOS E BRINDES LTDA": "1787",
-            "JOTA TRES CONFECCAO DE VESTUARIOS LTDA": "1789",
-            "TEXTIL LITORAL NORTE LTDA": "1790",
-            "MONICA DE LIMA PARRACHO MARTINS": "1792",
-            "J. DE L. AZEVEDO": "1793",
-            "CAVEIRA TECH NEGOCIOS DIGITAIS LTDA": "1794",
-            "SUPER BRINDES LTDA": "1795",
-            "S10 STORE LTDA": "1796",
-            "PONTES PRODUCOES E EVENTOS LTDA": "1797",
-            "FX MARKETING DIGITAL LTDA": "2037",
-            "SISTEMA NORDESTE DE COMUNICACAO LTDA": "1822",
-            "SANTA CRUZ FUTEBOL CLUBE": "1815",
-            "TACAO - CONSULTORIA E ORGANIZACAO ESPORTIVA LTDA": "1828",
-            "EMERSON DA SILVA ANUNCIACAO": "1829",
-            "LUCAS FELIPE DE LIMA FERREIRA": "1830",
-            "BBS SERVICOS E PARTICIPACOES LTDA": "1831",
-            "FABRICA ESTUDIOS LTDA": "1832",
-            "MATEUS DAMIAO GARCIA": "1833",
-            "TABOOLA BRASIL INTERNET LTDA": "1834",
-            "OBVIO BRASIL SOFTWARE E SERVIÇOS S.A": "1855",
-            "GAMEPLAYS PUBLICIDADE E MERCHANDISING LTDA": "1856",
-            "FLAVIANO ANDRE FIDELES GOES": "1858",
-            "LENON LEIRAS FREITAS 36926080801": "1859",
-            "GEINNY STEPHANE ATAIDE LIMA": "1860",
-            "GABRIEL BECHTLUFFT VICTORINO": "1861",
-            "AMERICA FUTEBOL CLUBE": "1865",
-            "FEDERACAO NACIONAL DAS APAES": "1867",
-            "TT CORAL LTDA": "1879",
-            "DEFINE DESIGN FABRICACAO DE MATERIAIS PLASTICOS LTDA": "1880",
-            "BLACK GAMMING MARKETING E MIDIA DIGITAL LTDA": "1881",
-            "M. DE C. MUCELIN LTDA": "1882",
-            "NAILSON SILVA DE AGUIAR": "1883",
-            "UM TORCEDOR PELO MUNDO LTDA": "1884",
-            "RAYANE EWELLIN PORFIRIO DA SILVA MELLO": "1885",
-            "ZERO INSTITUICAO DE PAGAMENTO S.A.": "1887",
-            "LEANDRO SANTOS DE OLIVEIRA": "1888",
-            "ANDERSON FREIRE DOS SANTOS": "1906",
-            "PIX DA SORTE CAPITALIZACAO E PROMOCOES LTDA": "1907",
-            "GEAN AFONSO SILVA DE CARVALHO": "1927",
-            "BMBR MEDIA LTDA": "1928",
-            "EBD MANUTENCAO DE EQUIPAMENTOS LTDA": "1929",
-            "MARCELO NAVES CHAVES FILHO": "1930",
-            "LANA MARKETING LTDA": "1931",
-            "LUIZ PAULO WALZERTUDES DANTAS": "1932",
-            "CHINA TENDAS LTDA": "1933",
-            "INVICTUS AGENCIA LTDA": "1969",
-            "OCA SERVIÇOS DE PUBLICIDADE LTDA": "1935",
-            "DANYELLE LIMA DOS S DE FARIAS": "1936",
-            "SHIRLEY DE TORRES BANDEIRA": "1937",
-            "PAULO ANDRE ELIHIMAS MARCONDES": "1938",
-            "RR ASSESSORIA EMPRESARIAL LTDA": "1970",
-            "OLE INTERACTIVE DO BRASIL LTDA.": "1940",
-            "LUCAS MATHEUS MUNIZ DA SILVA": "1950",
-            "ROC3 ASSESSORIA EMPRESARIAL LTDA": "1971",
-            "FLOW DIGITAL SCALE LTDA": "1972",
-            "SPORTS WEB BRASIL - CONTEUDOS DIGITAIS LTDA.": "1973",
-            "JOAO THOMAZ DA SILVA OLIVEIRA": "1974",
-            "JOAO VITOR ALVES DOS SANTOS": "1975",
-            "ONE PLUS ONE PUBLICIDADE LTDA": "1976",
-            "ALANA CAROLINA SOARES": "1977",
-            "ASSOCIACAO ATLETICA MAGUARY": "1978",
-            "ANDRE ANTUNES MENDES MARKETING DIRETO LTDA": "1979",
-            "BRUNO SOUSA DE JESUS LTDA": "1980",
-            "JULIO CESAR VILAS GOMES": "1981",
-            "CARIOCA CONTEUDOS DIGITAIS LTDA": "1982",
-            "LEONARDO AMORIM DE ARAUJO": "1983",
-            "BANGBANG CONTEUDO EM IMAGENS LTDA": "1984",
-            "RAFAEL CONSTANTINO COMERCIO DIGITAL LTDA": "1985",
-            "SBR ESPORTES E EMPREENDIMENTOS LTDA": "1986",
-            "ISR PRODUCOES E EVENTOS LTDA": "1987",
-            "SANTA MARIA EDITORA LTDA": "1988",
-            "PJ CONFECCAO DE UNIFORMES LTDA": "1989",
-            "ALISON DA SILVA DA ROSA": "1990",
-            "BRUNA GISSELY ALBUQUERQUE DA LUZ": "1991",
-            "CLEVERSON CARLOS PIMENTEL DIAS TOP SISTEMA": "1992",
-            "LIVIO DA SILVA CARDEAL": "1993",
-            "PEDRO SPERANDIO JUNIOR": "1994",
-            "AUDIENCY BRASIL TECNOLOGIA LTDA": "1995",
-            "LINARA MARIA SILVA DE SOUSA QUINTANILHA": "2025",
-            "VISIONARY TECH LTDA": "2026",
-            "PEGASUS DIGITAL LTDA": "2027",
-            "DANIEL ANDRE DA SILVA GAIA": "2028",
-            "J LOURENCO DA SILVA": "2029",
-            "GESTAO FERRARI SERVICOS ESPECIAIS LTDA": "2030",
-            "SIMONETTI ANALISES LTDA": "2032",
-            "FLASHSCORE MEDIA LTDA": "2033",
-            "LUIZ CARLOS CAVALCANTI": "2034",
-            "DETONE COMUNICACAO VISUAL LTDA": "2035",
-            "65.055.563 THIAGO WILLIAMS BEZERRA ZILLINGER": "2038",
-            "LUAN HENRIQUE GOMES SILVA": "2039",
-            "ATIVA TRAVEL VIAGENS E LOCACOES LTDA": "2041",
-            "PIXUO SERVIÇOS TECNOLOGICOS E COBRANÇA LTDA": "1167",
-            "FLA-FLU SERVIÇOS S.A.": "1678",
-            "OBF ARMAÇÕES": "1189",
-            "CARLOS RAFFAEL": "1331",
-            "IMAGEM CENOGRAFIA": "1192",
-            "VITOR OLIVEIRA": "1193",
-            "COOPERATIVA": "1194",
-            "CANTON IMPRESSOES": "1195",
-            "TRANSPORTES AGENCIAMENTO": "1196",
-            "ESTOFADOS NORDESTÃO": "1197",
-            "MARIA LINDOMAR": "1198",
-            "ÍTALO RAFHAEL": "1199",
-            "HUGO DA SILVA MENEZES": "1200",
-            "BRASTUR AGENCIA DE TURISMO LTDA": "1665",
-            "AILSON RAMALHO OLIVEIRA DA COSTA LTDA": "1203",
-            "PARAÍBA SPORT": "1204",
-            "DAVID BRAZIL COMUNICAÇÕES LTDA": "1205",
-            "DIAGONAL MAGNETICA": "1206",
-            "OLE - SCORPIONS PRODUÇÕES LTDA": "1328",
-            "CLEBERTON RENATO DE OLIVEIRA": "1209",
-            "EMPRESA TELEVISÃO": "1210",
-            "POSTO SUDOESTE CATOLE LTDA": "1211",
-            "PAGAMENTO BOLETOS": "1212",
-            "CONEXAO PRODUCOES E EVENTOS LTDA": "1213",
-            "MARCELO MARTINS DE OLIVEIRA JUNIOR": "1214",
-            "PYERRE SAYMON DE MELO SILVA SOCIEDADE INDIVIDUAL DE ADVOCACIA": "1215",
-            "MARIA JACIARA PATRICIO ARAUJO": "1216",
-            "CLUBE REGATAS": "1419",
-            "FEST VERÃO ENTRETENDIMENTOS LTDA - EPP": "1220",
-            "ATLETICO MONTE AZUL": "1221",
-            "CODING DESENVOLVIMENTO E CONSULTORIA EM TECNOLOGIA LTDA": "1222",
-            "CLUBE CAMPESTRE": "1223",
-            "DIRECT PUBLICIDADE E COMUNICACAO VISUAL LTDA": "1224",
-            "OSANDI GADELHA DE SOUSA SILVA": "1225",
-            "DARLAN FREIRE DE ANDRADE": "1226",
-            "WANDEMBERG COUTINHO DE SÁ SOARES DA SILVA": "1227",
-            "MURIEL WYLKER FERREIRA": "1228",
-            "CROWE MACRO": "1231",
-            "THALLES DESENVOLVEDOR": "1232",
-            "AJBO CONSULTORIA": "1233",
-            "VALTER TRIGUEIRO JUNIOR": "1234",
-            "GERVASIO DEIVYSSON ANDRADE COSTA PINTO": "1235",
-            "RENINBERG DEIVYSSON": "1236",
-            "MULTFORMAS AGENCIA": "1237",
-            "SARAH RUTH NASCIMENTO CUNHA": "1238",
-            "PROJETAR CONFECÇÃO": "1239",
-            "THAIS RODRIGUES DA SILVA DE CARVALHO": "1240",
-            "TREZE FUTEBOL CLUBE": "1241",
-            "AAGUIA EMPREENDIMENTOS": "1251",
-            "TEOGENES HIGINO M LESSA": "1345",
-            "PAULO JORGE SALES": "1346",
-            "ARTHUR DOS SANTOS": "1371",
-            "DIEGO MAXIMIANO DE AGUIAR": "1372",
-            "MICHEL FIGUEIREDO COSTA": "1374",
-            "HILTON JOAQUIM DE MELO JUNIOR": "1375",
-            "SANDREY VICTOR DE OLIVEIRA SANTOS": "1377",
-            "DENISLANE MATOS CANDEIAS": "1378",
-            "DAVID FREITAS SOARES": "1380",
-            "FRANKLIN HENRIQUE FREITAS DOS SANTOS": "1381",
-            "VANESSA RODRIGUES TABAREZ": "1382",
-            "ARENA VIBRA CENTRO ESPORTE LTDA": "1384",
-            "RAYANA MEIRELES SERVARE": "1386",
-            "ASSOCIACAO DOS DONOS DE PARQUE DE VAQUEJADA E PROMOTORES DE EVENTOS CULTURAIS NORDESTINOS": "1762",
-            "FABRICIO ERIQUE FREITAS DOS SANTOS": "1389",
-            "FESTA CHEIA PRODUÇÕES E PROPAGANDAS LTDA": "1396",
-            "RAILSON CABRAL XAVIER": "1398",
-            "B.G PROMOÇÕES E EVENTOS MUSICAIS LTDA": "1399",
-            "RAYLLY CHAGAS BARBOSA": "1401",
-            "LUCAS MYCHEL FERREIRA": "1403",
-            "LARISSA DANDARA ARAUJO BARBOSA": "1404",
-            "FRANCISCO ARGEMIRO BEZERRA JUNIOR": "1406",
-            "BRUNO CHARLES DA SILVA COSTA": "1407",
-            "OBVIO BRASIL SOFTWARE E SERVIÇOS LTDA": "1443",
-            "IMOBILIÁRIA NOSSA SENHORA DE FATIMA": "1445",
-            "DIOMAR TADEU DANTAS DE OLIVEIRA - BRASGAMING": "1447",
-            "NW ASSESSORIA E SERVICO EMPRESARIAL LTDA": "1448",
-            "SINGLEBYTE DESENVOLVIMENTO E CONSULTORIA EM TI LTDA": "1450",
-            "THALLES PEREIRA DANTAS": "1454",
-            "Empresa de Televisão João Pessoa - LTDA": "1456",
-            "RENINBERG ALMEIDA E SILVA JUNIOR": "1458",
-            "YGOR EDUARDO MACIEL FEITOZA": "1459",
-            "FABIO JOSÉ LEAL GUERRA ME": "1460",
-            "MANOEL FRANCISCO DE ALMEIDA NETO": "1461",
-            "CARLOS EDUARDO SILVA ALVES": "1562",
-            "CRAB DE BURGOS SOCIEDADE UNIPESSOAL LTDA": "1565",
-            "AÇO BRAZIL COMÉRCIO LTDA": "1597",
-            "C N QUEIROZ EIRELI - ME": "1598",
-            "FACEBOOK SERVIÇOS ONLINE DO BRASIL LTDA - STRING": "1599",
-            "ASSECONT TECNOLOGIA LTDA": "1604",
-            "FLAVIO PEREIRA DOS SANTOS": "1605",
-            "BTC TECNOLIGIA E SISTEMAS LTDA": "1606",
-            "MARIA SILVANA SILVA": "1607",
-            "D2 - PROMOCOES E EVENTOS LTDA": "1608",
-            "CONNECTPSP DESENVOLVEDORA DE SISTEMA SA": "1773",
-            "LUYD GUSTAVO THEODULINO DE FARIAS": "1610",
-            "TEIA ESTAMPARIA E PERSONALIZADOS LTDA": "1611",
-            "NEOPRINT GRAFICA E EDITORA LTDA": "1612",
-            "SERRA BRANCA ESPORTE CLUBE": "1619",
-            "GLOBAL MARKETING DIGITAL MEDIA": "1704",
-            "ASSOCIACAO DOS VAQUEIROS, MONTADORES E CAVALEIROS DO SERIDO - AVAMCASE": "1705",
-            "SILENE ALBUQUERQUE FARIAS": "1706",
-            "CGN COMUNICACAO E NEGOCIOS LTDA": "1707",
-            "LUCAS SANTANA RAMOS CARTAXO": "1708",
-            "NELSON WILIANS & ADVOGADOS ASSOCIADOS": "1710",
-            "SIDNEY SILVA": "1724",
-            "COMPLEXO K LTDA": "1727",
-            "PULSAR ENTRETENIMENTO LTDA": "1728",
-            "JESSIKA BEATRICE DE LIMA": "1729",
-            "RAFFAELE SEABRA RICCI CONSULTORIA EMPRESARIAL": "1730",
-            "DC PRODUCAO E DIVULGACAO LTDA": "1768",
-            "X BRASIL INTERNET LTDA": "1808",
-            "UMBELINA MARIA BEZERRA CABRAL": "1809",
-            "ALEXSANDRO LEAL DA SILVA": "1810",
-            "MIX EXPRESSO ALIMENTOS E EVENTOS LTDA": "1820",
-            "PEDRO DE OLIVEIRA SILVA NETO": "1813",
-            "TINTAS MARELUX INDUSTRIA LTDA": "1814",
-            "T R CRONO COMERCIO E SERVICOS LTDA": "1818",
-            "CHURRAS DO REI LTDA": "1825",
-            "COMERCIAL CAMPESTRE CLUB": "1835",
-            "START INDUSTRIA E COMERCIO DE CONFECCAO DO VESTUARIO LTDA": "1836",
-            "LF PRODUCOES LTDA": "1837",
-            "MOVEIS PARAIBA": "1838",
-            "T ALCANTARA COMERCIO DE MATERIAIS DE CONSTRUCAO LTDA": "1839",
-            "MILENA MAYARA FERREIRA SANTOS": "1840",
-            "MARIA RAQUEL AMORIM DE ALMEIDA": "1841",
-            "ROMULO LUCENA DA COSTA": "1842",
-            "INOVA IMPRESSAO E DESIGN LTDA": "1843",
-            "CLUBE DE REGATAS DO FLAMENGO": "1648",
-            "TECNO INDUSTRIA E COMERCIO DE COMPUTADORES - IBYTE": "1850",
-            "AGENCIA ANENO PUBLICIDADE E SERVICOS LTDA": "1851",
-            "GL GUIMARAES LIMA ENGENHARIA LTDA": "1852",
-            "AUTOPOSTO DE COMBUSTIVEIS BOA ESPERANCA LTDA": "1853",
-            "GIOVANNI PAOLO AYRES FREIRE DE ANDRADE": "1854",
-            "EMPRESA BRASILEIRA DE BENEFICIOS E PAGAMENTOS INSTITUIÇÃO DE PAGAMENTOS LTDA": "1866",
-            "GAC COMERCIO DE REVESTIMENTOS E SERVICOS EIRELI": "1869",
-            "FERNANDA LAURENTINO DE FARIAS": "1870",
-            "B21 SOLUCOES GRAFICAS LTDA": "1871",
-            "VERONICA ROSAS DE QUEIROZ 75346850449": "1872",
-            "CLAUDEMILTON CAMARA DE SOUZA": "1873",
-            "NELSON WILIANS ADVOGADOS - NOVO": "1874",
-            "FABIO JOSE MELLO GALDINO FILHO": "1875",
-            "ALEXSANDRO DA COSTA PONCIANO": "1876",
-            "365 SCORES MIDIA LTDA": "1901",
-            "VIRALIZART AGENCIA DE PUBLICIDADE LTDA": "1891",
-            "FLAVIA ALMEIDA SILVA": "1892",
-            "PEREIRA & BRITO LTDA.": "1893",
-            "ANDERSON LEAL FERREIRA": "1894",
-            "M C DA COSTA MARQUES CULTURA E EVENTOS": "1903",
-            "MAYARA ROCHA": "1904",
-            "CHARLES FRANKLIN DELANO MEDEIROS AMARO": "1905",
-            "MARIA EULINA TAVARES DOS SANTOS SILVA": "1941",
-            "HA PRODUCOES LTDA": "1942",
-            "JOSAFA JUNIOR BARBOSA FILHO": "1943",
-            "GERALDO CARLOS FERREIRA FILHO": "1944",
-            "GUILHERME SANTOS MEDEIROS": "1945",
-            "JOSE NILTON DA SILVA PEREIRA - CHURRASCARIA E TAPIOCARIA DO ALTO": "1946",
-            "VITOR DO NASCIMENTO ARAUJO SOUZA": "1947",
-            "ALLYSON GOMES ALBUQUERQUE": "1948",
-            "FRENTE CORRETORA DE CAMBIO SA": "1962",
-            "GETRA CG - GESTAO E CONSULTORIALTDA": "1956",
-            "RONALDO BARBOSA DE AGUIAR DA SILVA LTDA": "1957",
-            "ALELO INSTITUICAO DE PAGAMENTO SA": "1958",
-            "SALES IND E COM DE MOVEIS LTDA": "1963",
-            "JAMPA BALOES E COMUNICACAO VISUAL LTDA": "1964",
-            "ERALDO RICARDO DE SOUZA": "1965",
-            "SUPERMERCADO ARAUJO E OLIVEIRA LTDA": "1966",
-            "PLANET CELL COMERCIAL DE INFORMATICA LTDA": "1967",
-            "AMILTON SOARES DE SOUZA": "1968",
-            "VANESSA GUEDES CUNHA": "2007",
-            "BWISE MEDIA BRASIL LTDA": "2008",
-            "ADAUTO CIQUEIRA AFONSO": "2009",
-            "PAULO RICARDO ESCOSSIO DE FREITAS FILHO": "2010",
-            "ICFIN - INSTITUTO DE COMPLIANCE FINANCEIRO LTDA": "2011",
-            "LEANDRO JOSE LUIZ": "2012",
-            "IGAMING FUTURE TREINAMENTOS LTDA": "2013",
-            "INACIO ERIVAN SILVA LIMA": "2014",
-            "ASSOCIACAO DOS CRIADORES E PRODUTORES DE CAPRINOS E OVINOS DE PARARI - PB": "2015",
-            "AO3 TECNOLOGIA LTDA": "2016",
-            "SUELEIDE DA SILVA ROCHA": "2019",
-            "LUCAS MATHEUS DA SILVA SANTOS": "2020",
-            "PROMAX SOLUCOES VISUAIS LTDA": "2022",
-            "MARLEN JOSE DA SILVA": "2023",
-            "BRUNO DE MEDEIROS GALVAO MAZUTTI": "2036",
-            "NAIP INSTITUICAO DE PAGAMENTO SA": "2040",
-            "GUSTAVO HENRIQUE SOUZA AGUIAR MARKETING": "1162",
-            "RAFLA MELLO WEB COMUNICACOES LTDA": "1329",
-            "IDENTIFICA SERVICOS DE PUBLICIDADE E REPRESENTACAO LTDA": "1330",
-            "FGM SPORTS LTDA": "1332",
-            "GERSON VAPO AGENCIAMENTO E COMERCIO DE ARTIGOS ESPORTIVOS LTDA": "1333",
-            "ALL TYPE COMUNICAÇÃO E MARKETING LTDA": "1334",
-            "RIO DE JANEIRO VOLEI CLUBE": "1336",
-            "NATHAN ANDRADE SILVA": "1337",
-            "PLASTPROMO": "1339",
-            "IMPULSEMAX MARKETING LTDA": "1340",
-            "INDYRA JESSIKA QUEIROZ LINHARES": "1341",
-            "MOURA BENEVIDES": "1342",
-            "MIDAS MIDIA": "1343",
-            "GAMING DIGITAL": "1418",
-            "CRAB DE BURGOS SOCIEDADE UNIPESSOAL LTDA - INTERATIVA VIEWS": "1421",
-            "RIO ESTREITO ENTRETENIMENTO LTDA": "1425",
-            "G. KAGAN REIS LTDA": "1426",
-            "VINICIUS PAZ": "1427",
-            "EDIVANDO PEDRO DA SILVA JUNIOR": "1428",
-            "EMPOZE - EDITORA, GRAVADORA E PRESTACAO DE SERVICOS LTDA": "1429",
-            "LETICIA CERQUEIRA - MOURA PIRES ENTRETENIMENTO LTDA": "1430",
-            "WILLIAM PINTO DE ITABUNA PRODUCAO TEATRAL": "1431",
-            "G.O.PROPAGANDA E PROMOCOES LTDA": "1433",
-            "STAEL CONFECCOES DE UNIFORMES LTDA ME": "1434",
-            "AVELO NEGOCIOS E SERVICOS LTDA": "1435",
-            "PLANET INVEST- FOMENTO COMERCIAL LTDA": "1436",
-            "ENJOY MARKETING E MIDIAS SOCIAIS LTDA": "1437",
-            "JOSE ROBSON ALVES DA SILVA - ROBSON BODÃO": "1438",
-            "DANIEL PASSOS CAVALCANTI MOREIRA": "1439",
-            "BPERSONALIZED LTDA": "1440",
-            "DPF HEFESTO ARTIGOS ESPORTIVOS LTDA": "1552",
-            "EMC TRANSFERS IMPRESSOES LTDA": "1554",
-            "GREMIO RECREATIVO CULTURAL SOCIAL ESCOLA DE SAMBA": "1555",
-            "NLN PROMOCOES LTDA": "1557",
-            "SEND SPEED PRODUTOS E SERVIÇOS LTDA": "1558",
-            "TRAP GROOVE SHOWS LTDA": "1672",
-            "GABRIEL DE BARROS SANCHES PEREIRA": "1673",
-            "MORAH IMOVEIS LTDA": "1676",
-            "ALEX SOLUCOES DIGITAIS LTDA": "1677",
-            "CAMILLA NASCIMENTO PESTANA DOS SANTOS": "1715",
-            "TRACK INFO SOLUÇÕES DIGITAIS LTDA": "1716",
-            "MATHEUS PONTES MENEZES": "1717",
-            "RODRIGO AZEVEDO DE CASTRO": "1719",
-            "ALL FC LTDA": "1720",
-            "RAQUEL ARAÚJO CARVALHO": "1721",
-            "TZ PRODUCOES E ASSESSORIA ARTISTICA LTDA": "1722",
-            "SOFTERS SISTEMAS LTDA": "1755",
-            "WUESILVA DIGITAL INFLUENCER LTDA": "1756",
-            "ANA CAROLINA PEREIRA RAMOS": "1757",
-            "ASSOCIACAO PARAIBANA DOS DEFICIENTES VISUAIS - APADEVI": "1758",
-            "TF SOLUCOES DIGITAIS LTDA": "1759",
-            "V. L COMERCIO DE BRINDES PROMOCIONAIS LTDA": "1760",
-            "BOOSTER PRODUCOES AUDIVISUAIS E CULTURAIS LTDA": "1761",
-            "ELIANE SILVA SERVICOS LTDA": "1767",
-            "ONZEX PRODUCOES E PROMOCOES DE ESPETACULOS ARTISTICOS LTDA": "1799",
-            "RONALDO SIMOES ANGELIM LTDA": "1800",
-            "WILLIAN HENRIQUE RIBEIRO": "1801",
-            "A. DA S. ALMEIDA LTDA": "1802",
-            "LUAN DE JESUS SCANFERLA SA": "1803",
-            "GABRIELA PROPAGANDA E MARKETING LTDA": "1804",
-            "MARCELO THIAGO GOMES DE LIRA": "1805",
-            "BURITYPS ASSESSORIA E CONSULTORIA ESPORTIVA LTDA": "1806",
-            "ERIC NATAN BALBINO DE ARAUJO": "1807",
-            "JRX INTERNET LTDA": "1819",
-            "CAMISA DIMONA E MALHAS LTDA": "1827",
-            "INVENTOS DIGITAIS E COMERCIO LTDA": "1826",
-            "PEDRO PIRES DO RIO MOL 09957720708": "1889",
-            "CLAUDIO ROBERTO TORRES FILHO": "1890",
-            "ALMEIDA &SALSA CONSULTORIA, DESIGN & GRAFICA LTDA": "1895",
-            "RSP PRODUCOES E EVENTOS LTDA": "1896",
-            "KLAUDIA KALININ": "1897",
-            "MARCELO CORTES DA SILVA": "1898",
-            "LEONARDO CARVALHO JUNIOR": "1899",
-            "RELOCELLS ACESSORIOS LTDA": "1900",
-            "MICROSOFT DO BRASIL IMPORTACAO E COMERCIO DE SOFTWARE E VIDEO GAMES LTDA": "1908",
-            "GOOGLE CLOUD BRASIL COMPUTACAO E SERVICOS DE DADOS LTDA.": "1909",
-            "JOYCE DA CONCEIÇÃO DUARTE": "1911",
-            "A L M OLIVEIRA SENTIMENTO TRICOLOR AGÊNCIA DE NOTÍCIAS": "1912",
-            "GABRIEL DE ALMEIDA RAIMUNDI": "1913",
-            "FUTBOLACO PRODUTORA MARKETING E MIDIA LTDA ME": "1914",
-            "LUIZA QUINTANA FRAGA": "1915",
-            "VIBE AGENCY SERVIÇOS E COMUNICAÇÃO LTDA": "1916",
-            "JIR COMUNICACAO E MANUTENCAO ELETRONICOS LTDA": "1917",
-            "RENATO GUICE SENNE": "1918",
-            "PASV COMERCIO DE DISCOS E FITAS LTDA": "1920",
-            "FIRULA EM CAMPO LTDA": "1921",
-            "JULIANA DOS SANTOS RAMOS": "1922",
-            "ICARO VINICIUS MOREIRA DE MELLO": "1923",
-            "ANA BEATRIZ SANTOS DE FREITAS JARDIM": "1924",
-            "PAULO CESAR MATTOS DE OLIVEIRA": "1925",
-            "LUIZE STEFANI DA CONCEIÇÃO BRANDÃO": "1926",
-            "EDUARDO DA COSTA DUARTE": "1951",
-            "DIGITAL PRESENC X LTDA": "1953",
-            "ADLLEY YWCH LIMA DA SILVA": "1997",
-            "KAIO VINICIUS RODRIGUES DE OLIVEIRA": "1998",
-            "ALPHA SEND S/A": "1999",
-            "NEXUS TEC LTDA": "2000",
-            "DAVID ALLAN MEDEIROS DA SILVA": "2001",
-            "RODRIGO ALMEIDA DE OLIVEIRA": "2002",
-            "MATEUS MELO DO NASCIMENTO": "2003",
-            "EVERTON LAMARTINE NASCIMENTO ESTEVAM": "2004",
-            "JEFFERSON SILVA DE OLIVEIRA": "2005",
-            "FELIPE VENTUROTTI GAVINHO": "2006",
-            "REI COPY COMERCIO E SERVICOS DE COMUNICACAO VISUAL LTDA": "2024",
-            "PAMELLA WANCHERLINY PAIVA TORRES GUIMARAES": "2042",
-            "PAOLA VITORIA CHAVES": "2043",
-            "PEDRO HENRIQUE GARBINI RODRIGUES SANTOS": "2044",
-            "JSO SOLUCOES CORPORATIVAS LTDA": "2045",
-            "BIZZU MARKETING DIGITAL LTDA": "2046",
-            "GABRIEL ALMAS DE BARROS SOUTO": "2047",
-            "V.C.B. DA SILVA LTDA": "2048",
-            "INFINITY AGENCY LTDA": "2049",
-            "CAUAN RODRIGUES CAZELOTTO": "2050"
-        }
+        "fornecedores": {}
     },
     "JBD COMUNICACAO E TECNOLOGIA LTDA": {
         "impostos": {
@@ -1250,189 +607,7 @@ BANCO_DE_DADOS_EMPRESAS = {
             'TERRA': {'n': 'Banco Terra', 'r': '706'},
             'PAGSTAR': {'n': 'Pagstar', 'r': '842'}
         },
-        "fornecedores": {
-            "FORNECEDOR DO ESTADO DA PB": "506",
-            "FORNECEDOR PARA NOTAS CANCELADAS": "505",
-            "ANDERSON DA SILVA VALENTIM": "585",
-            "JONAS GABRIEL MUNIZ DE SOUSA": "586",
-            "NUTRICARNES C. V. E A. DE CARNES, FRANGO E FRIOS LTDA": "588",
-            "MAGAZINE LUIZA S/A": "590",
-            "DITONGO CONFECCOES LTDA": "591",
-            "ZEINA RASSI SOCIEDADE INDIVIDUAL DE ADVOCACIA": "611",
-            "RASSI E QUEIROZ MARCAS E PATENTES LTDA": "612",
-            "NGX BRASIL TECNOLOGIA LTDA": "613",
-            "BRAMOS ADMINISTRAÇÃO DE OBRAS LTDA": "614",
-            "KARL MARX ARRUDA SILVEIRA": "615",
-            "49.509.915 GABRIELA DE FREITAS NUNES": "616",
-            "52.904.040 PEDRO EMANOEL MARINHO SOUZA": "617",
-            "SEBASTIAO JOSE LACERDA DE ANDRADE CONSULTORIA EM TECNOLOGIA DA INFORMACAO LTDA": "618",
-            "FLANKR TECNOLOGIA LTDA": "619",
-            "CAYO GABRYEL HOLLANDA ANDRADE": "620",
-            "52.522.022 LUCAS CORREIA LUCENA DE SOUZA RIBEIRO": "621",
-            "JOICE RAFAELA DE ARAUJO FERNANDES": "622",
-            "THIAGO FELIPE VIANA DINIZ": "623",
-            "52.813.186 JOAO VICTOR MARINHO SOUZA": "624",
-            "JOAO CALIXTO DA SILVA NETO": "625",
-            "FRANCISCO WELIO FIRMINO DA SILVA JUNIOR": "626",
-            "ORBIT TECH SERVICO DE TECNOLOGIA LTDA": "627",
-            "GROEN CONSULTORIA EM TECNOLOGIA LTDA": "628",
-            "OBVIO BRASIL SOFTWARE E SERVICOS S.A.": "629",
-            "ART MAKER COMUNICACAO LTDA": "630",
-            "CLUSTER LTDA": "631",
-            "ATIVO GAMES LTDA": "691",
-            "APPROVE PAYMENT": "646",
-            "M D EVANGELISTA": "647",
-            "EBTRANS LOGISTICA LTDA": "648",
-            "PRIMETIME COMUNICACAO LTDA": "792",
-            "THUNDER SERVICOS": "650",
-            "ALBUQUERQUE MAIA": "651",
-            "SALES MOVEIS": "652",
-            "PIXGAMING": "653",
-            "ILLUMINARE STUDIO": "654",
-            "JP BALOES": "655",
-            "JOAO LUCAS COSTA": "656",
-            "CABRAL COMERCIO": "657",
-            "CLIMARIO": "658",
-            "DOM CAFE E SERVICOS DE CAFE": "659",
-            "GELAR CLIMATIZAÇÃO": "660",
-            "RIBALTA HOTELARIA E TURISMO": "661",
-            "EXATO DIGITAL LTDA": "662",
-            "VP SOLUCOES EM FECHADURAS": "663",
-            "CHURRASCARIA FOGO DE CHAO": "664",
-            "RASP NEGOCIOS E INTERMEDIAÇÕES": "665",
-            "TV SBT": "666",
-            "FRENTE CORRETORA DE CAMBIO": "667",
-            "ESCRITÓRIO DR. FEIJÓ": "668",
-            "ACG ADMINISTRADORA": "669",
-            "ISRAEL MACENA": "670",
-            "AUDITOR AUDITORES INDEPENDENTES": "672",
-            "RGBC LTDA": "673",
-            "EDUARDO CRISTIAN": "674",
-            "WALTER VIEIRA DE MELO": "676",
-            "LESKA": "675",
-            "IAGO ERSON SANTIAGO DE AMARANTE": "677",
-            "CAIO CASE DOS SANTOS": "741",
-            "DIOGO FERREIRA": "679",
-            "VM CONSTRUÇÕES E SO": "680",
-            "NEVES E MONTEIRO": "681",
-            "J CARLOS COMERCIO ATACADISTA DE MOVEIS EIRELI": "685",
-            "SPORTRADAR BRAZIL LTDA": "708",
-            "RIOPAG S/A": "853",
-            "AH MARKETING DIGITAL LTDA.": "710",
-            "BRUNO MOURA SILVA": "711",
-            "MOD - MARKETING ORIENTADO A DADOS LTDA": "712",
-            "MARCO ANTONIO PEREIRA DA SILVA": "713",
-            "JUSSIER KELLVIN DE SOUZA": "714",
-            "THIERRY MATHEUS BEZERRA DE MELO": "715",
-            "ARRUDA COMUNICAÇÃO LTDA": "716",
-            "JEFFERSON JORGE DE ARAUJO RODRIGUES": "717",
-            "LUPERCIO DAVI FARIAS LUCAS": "718",
-            "KAMINO INSTITUIÇÃO DE PAGAMENTO LTDA": "719",
-            "HYGOR GONCALVES DUARTE": "720",
-            "JESSICA STEPHANNE DA SILVA COSTA": "721",
-            "INTERNATIONAL BET ASSESSORIA E CONSULTORIA EM MARKETING DIGITAL LTDA": "722",
-            "ERICA CRISTIANE DA SILVA LIMA": "723",
-            "CAMILA AYUMI KADO": "724",
-            "ISMENIA VITORIA SANTIAGO DE AMARANTE": "725",
-            "YASMIN AMELIA FIRMINO": "726",
-            "LEANDRO RODRIGUES DE JESUS": "727",
-            "GABRIELLA SERRANONE CONRADO": "728",
-            "MATHEUS HENRIQUE GUEDES DE OLIVEIRA": "729",
-            "ARTHUR TORRES PAIVA LTDA": "730",
-            "RISE ADMINISTRACAO LTDA": "731",
-            "LUIZ FELIPE FERREIRA DA SILVA": "732",
-            "VICTOR NASCIMENTO LIMA": "733",
-            "RENAN PHELIPE ASSIS LIMA MAHON": "734",
-            "KAIO EDUARDO MIRANDA GOMES": "735",
-            "CARLOS RAFAEL FEITOSA RODRIGUES": "736",
-            "X7 ASSESSORIA FINANCEIRA - JORGE S ARAUJO": "737",
-            "FEIJO E SOUZA SOCIEDADE DE ADVOGADOS": "738",
-            "FREITAS E RODRIGUES NEGOCIOS E INTERMEDIACOES LTDA": "739",
-            "MAISA GOMES DO NASCIMENTO": "740",
-            "JHONATHAN WENDELL DE OLIVEIRA MELO": "742",
-            "VINICIUS PREBIL ALCANTARA 44061109847": "743",
-            "SALES INDUSTRIA E COMERCIO DE MOVEIS LTDA": "745",
-            "BETPASS LTDA": "766",
-            "JAMPA BALOES E COMUNICACAO VISUAL LTDA": "767",
-            "JANAIRES ALCANTARA DE MEDEIROS": "768",
-            "RASP NEGOCIOS E INTERMEDIACOES LTDA": "769",
-            "EDUARDO CRISTIAN DE MENDONCA RODRIGUES LTDA": "770",
-            "NEVES E MONTEIRO TREINAMENTOS LTDA": "771",
-            "GENILZA MENDES DA COSTA": "772",
-            "DANNYELLE ALVES DOS SANTOS LUNA": "773",
-            "EYTOR FERRAZ GOMES DE MENEZES": "774",
-            "NDP ENTRETENIMENTO E VENDAS LTDA": "775",
-            "EDILSON MACHADO DO NASCIMENTO": "776",
-            "BLACK IA TECNOLOGIA LTDA": "777",
-            "MR TV E RADIO WEB CAMPINA GRANDE LTDA": "778",
-            "LEC EDUCACAO E PESQUISA LTDA": "779",
-            "JONATHAN MARQUES MINDAS": "780",
-            "ARTMETAL LTDA": "781",
-            "AMANDA GABRIELE LIMA TORRES": "782",
-            "IVAH MARKETING & GAMING LTDA": "783",
-            "ISRAEL MACENA SILVA": "784",
-            "AQUARACE SERVICOS E EVENTOS AQUATICOS LTDA": "785",
-            "IVLA MARANHAO SANTOS DE OLIVEIRA": "786",
-            "RICHARD L GLOBAL SECURITIES LTDA": "787",
-            "MARIA DOS PRAZERES RODRIGUES DA SILVA": "788",
-            "CLARIZA IRIS LIMA E SILVA": "789",
-            "DANIEL RIBEIRO DE ARAUJO LEITE": "790",
-            "TALES DMITRI ARAUJO LOPES": "791",
-            "LEGITIMUZ TECNOLOGIA LTDA": "793",
-            "XTREMEPUSH LTDA": "794",
-            "JACARANDATECH LTDA": "795",
-            "TT CAMBIO E TURISMO LTDA": "796",
-            "DAXX SOLUTIONS LTDA": "797",
-            "ACG INSTITUICAO DE PAGAMENTO S A": "800",
-            "SANTIAGO COMUNICACAO E MODA LTDA": "801",
-            "WESLLEY PATRICIO GOMES DE OLIVEIRA": "802",
-            "CMD BONES": "803",
-            "JEFFERSON BARBOSA DO NASCIMENTO": "804",
-            "PABLO GADELHA VIANA SOCIEDADE INDIVIDUAL DE ADVOCACIA": "805",
-            "RONILDO CASSIO DE CAMPOS & CIA LTDA": "806",
-            "ARNALDO FERREIRA DE MENDONCA NETO": "807",
-            "RS COMERCIO DE VIDROS E TECNOLOGIA LTDA": "808",
-            "FAMILY OFFICE CORPORATE SERVICOS LTDA": "809",
-            "AMAURI DE AQUINO GONCALVES 05522799439": "810",
-            "PIX GAMING DIGITAL MARKETING LTDA": "811",
-            "MB CONSULTORIA ESPORTIVA LTDA": "812",
-            "MARIA PRISCILLA DE SOUZA MENEZES": "813",
-            "MARIA CAROLINY SANTOS DE MELO": "814",
-            "KARTEJANE DEL SANTO DA SILVA": "815",
-            "SUPER BRINDES LTDA": "816",
-            "TAUANY ZANATA MARTINS": "817",
-            "FELIPE GUSTAVO MARTINS DE CASTRO": "818",
-            "BAZZANEZE AUDITORES INDEPENDENTES S/S": "819",
-            "ANNE SUENIA DA SILVA SALES": "820",
-            "M D EVANGELISTA - PRODUCOES": "821",
-            "DSA-EVENTOS ESPORTIVOS LTDA": "822",
-            "P. I. TEIXEIRA SANTOS": "823",
-            "LUCAS MATHEUS MUNIZ DA SILVA": "824",
-            "INFOSTARK LTDA": "825",
-            "MS DESENVOLVIMENTO E SOLUCOES DIGITAIS LTDA": "826",
-            "POUSADA E RECEPTIVO ARIUS LTDA": "827",
-            "HOLANDA SUPORTE E CAPACITACOES LTDA": "828",
-            "ALEFE GUIMEL LINS BARBOSA CONSULTORIA EM MARKETING LTDA": "829",
-            "JOSE LEONARDO FRANCELINO LOPES LTDA": "830",
-            "JULLYAN JENNYFER OLIVEIRA PEQUENO": "836",
-            "ORLANDO MARCELINO S SANTOS": "832",
-            "NARDA MARIA FLORENCIO DOS SANTOS": "833",
-            "WALISSON ROMARIO FERREIRA": "834",
-            "FELIPE ARRUDA SOCIEDADE INDIVIDUAL DE ADVOCACIA": "837",
-            "57.221.901 FRANCYNEIDE GUEDES DE FREITAS ZECA": "838",
-            "MARIA HELOISA DE ARAUJO CAMPOS": "839",
-            "62.967.608 EDINALDO GOMES DE ARAUJO": "840",
-            "SORTE & PROMO LTDA": "843",
-            "PLANET INVEST - FOMENTO COMERCIAL LTDA": "844",
-            "EVOLUTION SERVICES BRAZIL LTDA": "845",
-            "M A SILVA BARBOSA": "846",
-            "NAEDJA AGRA CORDEIRO CONFECÇÕES LTDA": "848",
-            "J B DIAS LTDA": "849",
-            "CAPELLA TECNOLOGIA ACUSTICA LTDA": "850",
-            "EGNA DE ARAUJO SILVA": "851",
-            "64.669.257 JOAO ANTONIO DE HOLANDA CURVELO SALSA": "852",
-            "FACEBOOK SERVIÇOS ONLINE DO BRASIL LTDA": "854"
-        }
+        "fornecedores": {}
     },
     "EMPRESA PADRÃO (Genérica)": {
         "impostos": {
@@ -1448,30 +623,31 @@ BANCO_DE_DADOS_EMPRESAS = {
         "fornecedores": {}
     }
 }
+
 # Inicializa o Banco de Dados em Memória (Para adicionar novas empresas ao vivo)
 if 'empresas_db' not in st.session_state:
     st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V41.0")
-st.markdown("Integração Total com **Domínio Sistemas** (Exportação TXT) e Gestão de Empresas.")
+st.title("🏦 Conciliador Contábil IA V42.0")
+st.markdown("Integração Perfeita com **Domínio Sistemas** (Exportação CSV) e Gestão Dinâmica de Empresas.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
     
     # --- SISTEMA PARA ADICIONAR NOVA EMPRESA ---
-    with st.expander("➕ Adicionar Nova Empresa"):
-        nova_emp = st.text_input("Nome da Nova Empresa:")
-        if st.button("Gravar Empresa") and nova_emp:
+    with st.expander("➕ Adicionar Nova Empresa", expanded=True):
+        st.markdown("<small>Crie uma nova empresa para conciliar rapidamente.</small>", unsafe_allow_html=True)
+        nova_emp = st.text_input("Nome da Empresa:")
+        if st.button("Gravar Nova Empresa") and nova_emp:
             if nova_emp not in st.session_state['empresas_db']:
                 st.session_state['empresas_db'][nova_emp] = {
-                    "codigo_dominio": "0000",
-                    "cnpj": "00.000.000/0000-00",
                     "impostos": {'0561': {'n': 'IRRF Padrão', 'c': '9999'}}, 
                     "bancos": {'BANCO': {'n': 'Banco Padrão', 'r': '9999'}},
                     "fornecedores": {}
                 }
                 st.success(f"'{nova_emp}' registada com sucesso!")
+                time.sleep(1) # Dá tempo para ler a mensagem antes de atualizar
                 st.rerun()
             else:
                 st.warning("Esta empresa já existe!")
@@ -1484,14 +660,9 @@ with st.sidebar:
     config_atual = st.session_state['empresas_db'][empresa_selecionada]
     
     st.divider()
-    st.header("⚙️ Configuração Domínio TXT")
-    st.markdown("<small>Os dados abaixo irão no cabeçalho do ficheiro .txt gerado para importação no Domínio.</small>", unsafe_allow_html=True)
-    cod_dominio = st.text_input("Cód. Empresa no Domínio (Ex: 324):", config_atual.get("codigo_dominio", "0000"))
-    cnpj_empresa = st.text_input("CNPJ da Empresa:", config_atual.get("cnpj", "00.000.000/0000-00"))
-    
-    # Atualiza os dados na sessão
-    st.session_state['empresas_db'][empresa_selecionada]['codigo_dominio'] = cod_dominio
-    st.session_state['empresas_db'][empresa_selecionada]['cnpj'] = cnpj_empresa
+    st.header("⚙️ Configuração de Importação Domínio")
+    st.markdown("<small>Defina o Lote Inicial que o Domínio vai usar ao importar o CSV.</small>", unsafe_allow_html=True)
+    lote_inicial = st.text_input("Número do Lote Inicial:", "890000")
     
     st.divider()
     st.header("🎯 Natureza da Conciliação")
@@ -1505,7 +676,7 @@ with st.sidebar:
     
     st.divider()
     st.header("⚙️ Parâmetros")
-    ignorar_data = st.checkbox("Ignorar Limite de Datas", value=False, help="Cruza apenas pelo valor.")
+    ignorar_data = st.checkbox("Ignorar Limite de Datas", value=False, help="Cruza apenas pelo valor exato do Extrato com o Domínio.")
     tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Datas (dias):", 0, 60, 7)
     
     st.divider()
@@ -1762,20 +933,64 @@ if excel_file and receipt_files:
     st.dataframe(styled, use_container_width=True)
     
     # ---------------------------------------------------------
-    # EXPORTAÇÃO E DOWNLOAD DE ARQUIVOS (EXCEL E TXT DOMÍNIO)
+    # EXPORTAÇÃO E DOWNLOAD DE ARQUIVOS (EXCEL VISUAL E CSV DOMÍNIO)
     # ---------------------------------------------------------
-    out_excel = io.BytesIO()
-    with pd.ExcelWriter(out_excel, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
+    
+    # 1. Gera o Excel Visual Completo (Conciliação)
+    out_excel_visual = io.BytesIO()
+    with pd.ExcelWriter(out_excel_visual, engine='xlsxwriter') as wr: res_df.to_excel(wr, index=False)
     nome_arquivo_excel = f"conciliacao_{empresa_selecionada.split()[0].lower()}.xlsx"
 
-    # Gera o TXT do Domínio
-    txt_content = gerar_txt_dominio(res_df, cod_dominio, cnpj_empresa)
-    nome_arquivo_txt = f"LANCAMENTOS_{empresa_selecionada.split()[0].upper()}.txt"
-    # Codifica para ISO-8859-1 que é o padrão que o sistema Domínio geralmente gosta (substitui acentos estranhos)
-    txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
+    # 2. Gera o Ficheiro Padrão CSV/XLSX para Domínio
+    def extrair_conta_limpa(texto):
+        m = re.search(r'^(\d+)', str(texto).strip())
+        return m.group(1) if m else ""
+
+    df_valido = res_df[res_df['Valor Total'].apply(limpar_valor) > 0].copy()
+    linhas_dominio = []
+    
+    try: lote_atual = int(lote_inicial)
+    except: lote_atual = 890000
+
+    for idx, row in df_valido.iterrows():
+        val = limpar_valor(row['Valor Total'])
+        if val <= 0: continue
+        
+        cod_deb = extrair_conta_limpa(row['Débito'])
+        cod_cred = extrair_conta_limpa(row['Crédito'])
+        
+        data_lanc = row['Data Excel'] if row['Data Excel'] != '-' else row['Data PDF']
+        try: data_str = datetime.strptime(str(data_lanc), '%d/%m/%Y').strftime('%d/%m/%Y')
+        except: data_str = str(data_lanc)
+            
+        favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
+        if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
+        
+        # Converte o valor para o formato português (com vírgula)
+        valor_formatado = f"{val:.2f}".replace('.', ',')
+        
+        linhas_dominio.append({
+            'Data': data_str,
+            'Cód. Conta Debito': cod_deb,
+            'Cód. Conta Credito': cod_cred,
+            'Valor': valor_formatado,
+            'Cód. Histórico': '',
+            'Complemento Histórico': favorecido.upper()[:250],
+            'Inicia Lote': lote_atual,
+            'Código Matriz/Filial': '',
+            'Centro de Custo Débito': '',
+            'Centro de Custo Crédito': ''
+        })
+        lote_atual += 1
+        
+    df_dominio_export = pd.DataFrame(linhas_dominio)
+    
+    # Exporta para CSV com delimitador de ponto e vírgula e encoding pt-BR/latin1
+    csv_buffer = df_dominio_export.to_csv(sep=';', index=False, encoding='utf-8-sig')
+    nome_arquivo_csv = f"Importacao_Dominio_{empresa_selecionada.split()[0].upper()}.csv"
 
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
-        st.download_button("📥 Baixar Excel", out_excel.getvalue(), nome_arquivo_excel)
+        st.download_button("📥 Baixar Relatório de Conciliação (XLSX)", out_excel_visual.getvalue(), nome_arquivo_excel)
     with col_dl2:
-        st.download_button("📄 Baixar TXT (Padrão Domínio)", txt_bytes, nome_arquivo_txt)
+        st.download_button("🚀 Baixar Arquivo Domínio (CSV)", csv_buffer, nome_arquivo_csv, mime="text/csv")
