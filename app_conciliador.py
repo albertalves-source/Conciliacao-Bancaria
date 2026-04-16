@@ -237,7 +237,11 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     seq = 1
     for idx, row in df_valido.iterrows():
         val = limpar_valor(row['Valor Total'])
+        val_entrada = limpar_valor(row.get('Entradas', 0))
         if val <= 0: continue
+        
+        # Inteligência: Define se é Recebimento ou Pagamento pelas Entradas/Saídas
+        tipo_hist = "RECEBIMENTO" if val_entrada > 0 else "PGNTO"
         
         cod_deb = extrair_conta_limpa(row['Débito'])
         cod_cred = extrair_conta_limpa(row['Crédito'])
@@ -251,12 +255,15 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
         favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
         if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
         
+        # Insere a classificação final do Histórico
+        hist_texto = f"{favorecido.upper()} - {tipo_hist}"
+        
         linha02 = f"02{str(seq).zfill(7)}X{data_str}".ljust(150)
         linhas.append(linha02)
         seq += 1
         
         v_str = str(int(round(val * 100))).zfill(14) 
-        hist_pad = favorecido.upper()[:250].ljust(250)
+        hist_pad = hist_texto[:250].ljust(250)
         linha03 = f"03{str(seq).zfill(7)}{cod_deb.zfill(7)}{cod_cred.zfill(7)}{v_str}        {hist_pad}0000000"
         linhas.append(linha03)
         seq += 1
@@ -1222,8 +1229,8 @@ if 'empresas_db' not in st.session_state:
     st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
 
 # --- INTERFACE ---
-st.title("🏦 Conciliador Contábil IA V55.0")
-st.markdown("Plano de Contas Blindado: 100% Imune a Erros do Excel.")
+st.title("🏦 Conciliador Contábil")
+st.markdown("Plano de Contas")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1605,8 +1612,8 @@ if excel_file and receipt_files:
             'Valor': valor_formatado,
             'Cód. Histórico': '',
             'Complemento Histórico': favorecido.upper()[:250],
-            'Inicia Lote': lote_atual,
-            'Código Matriz/Filial': cod_matriz_filial,
+            'Inicia Lote': '',
+            'Código Matriz/Filial': '',
             'Centro de Custo Débito': '',
             'Centro de Custo Crédito': '',
             'Status Conciliação': row['Status'] 
