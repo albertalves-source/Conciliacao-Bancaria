@@ -240,8 +240,10 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
         val_entrada = limpar_valor(row.get('Entradas', 0))
         if val <= 0: continue
         
-        # Inteligência: Define se é Recebimento ou Pagamento pelas Entradas/Saídas
-        tipo_hist = "RECEBIMENTO" if val_entrada > 0 else "PGNTO"
+        # Inteligência PAGTO/RECBTO + NFS
+        tipo_hist = "RECBTO" if val_entrada > 0 else "PAGTO"
+        nota_val = str(row.get('Nota', '-')).strip()
+        texto_nota = f" NFS {nota_val}" if nota_val and nota_val != '-' else ""
         
         cod_deb = extrair_conta_limpa(row['Débito'])
         cod_cred = extrair_conta_limpa(row['Crédito'])
@@ -255,8 +257,8 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
         favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
         if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
         
-        # Insere a classificação final do Histórico
-        hist_texto = f"{favorecido.upper()} - {tipo_hist}"
+        # Novo Padrão: PAGTO NFS 1000 - FORNECEDOR
+        hist_texto = f"{tipo_hist}{texto_nota} - {favorecido.upper()}"
         
         linha02 = f"02{str(seq).zfill(7)}X{data_str}".ljust(150)
         linhas.append(linha02)
@@ -272,13 +274,13 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     return "\r\n".join(linhas) + "\r\n"
 
 # ==========================================
-# 🧠 BANCO DE DADOS INTEGRADO
+# 🧠 BANCO DE DADOS INTEGRADO (CÓDIGOS REAIS E BLINDADOS)
 # ==========================================
 BANCO_DE_DADOS_EMPRESAS_INICIAL = {
     "SELECT OPERATIONS S.A.": {
         "codigo_dominio": "324",
         "cnpj": "56.875.122/0001-86",
-        "codigo_matriz_filial": "1",
+        "codigo_matriz_filial": "", 
         "impostos": {
             '0561': {'n': 'IRRF A RECOLHER', 'c': '178'}, 
             '2172': {'n': 'COFINS A RECOLHER', 'c': '180'}, 
@@ -1230,7 +1232,7 @@ if 'empresas_db' not in st.session_state:
 
 # --- INTERFACE ---
 st.title("🏦 Conciliador Contábil")
-st.markdown("Plano de Contas")
+st.markdown("Automatizado por IA.")
 
 with st.sidebar:
     st.header("🏢 Empresa em Conciliação")
@@ -1551,7 +1553,7 @@ if excel_file and receipt_files:
     st.dataframe(styled, use_container_width=True)
     
     # ---------------------------------------------------------
-    # EXPORTAÇÃO COM FILTROS DE STATUS E BLINDAGEM DE CÓDIGOS
+    # EXPORTAÇÃO COM FILTROS DE STATUS
     # ---------------------------------------------------------
     st.divider()
     st.header("📥 Opções de Exportação")
@@ -1576,7 +1578,7 @@ if excel_file and receipt_files:
     nome_arquivo_txt = f"Importacao_Dominio_{empresa_selecionada.split()[0].upper()}.txt"
     txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
 
-    # 2. CSV (Domínio Novo) - Blindado contra contas vazias ou com "0"
+    # 2. CSV (Domínio Novo)
     def extrair_conta_limpa(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
         cod = m.group(1) if m else "9999"
@@ -1591,7 +1593,13 @@ if excel_file and receipt_files:
 
     for idx, row in df_valido.iterrows():
         val = limpar_valor(row['Valor Total'])
+        val_entrada = limpar_valor(row.get('Entradas', 0))
         if val <= 0: continue
+        
+        # LÓGICA DE PAGTO OU RECEBIMENTO COM NOTA
+        tipo_hist = "RECBTO" if val_entrada > 0 else "PAGTO"
+        nota_val = str(row.get('Nota', '-')).strip()
+        texto_nota = f" NFS {nota_val}" if nota_val and nota_val != '-' else ""
         
         cod_deb = extrair_conta_limpa(row['Débito'])
         cod_cred = extrair_conta_limpa(row['Crédito'])
@@ -1603,6 +1611,9 @@ if excel_file and receipt_files:
         favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
         if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
         
+        # Junta o TIPO (PAGTO/RECBTO) + NOTA + NOME DO FORNECEDOR
+        hist_final = f"{tipo_hist}{texto_nota} - {favorecido.upper()}"
+        
         valor_formatado = f"{val:.2f}".replace('.', ',')
         
         linhas_dominio.append({
@@ -1611,9 +1622,9 @@ if excel_file and receipt_files:
             'Cód. Conta Credito': cod_cred,
             'Valor': valor_formatado,
             'Cód. Histórico': '',
-            'Complemento Histórico': favorecido.upper()[:250],
-            'Inicia Lote': '',
-            'Código Matriz/Filial': '',
+            'Complemento Histórico': hist_final[:250],
+            'Inicia Lote': lote_atual,
+            'Código Matriz/Filial': '', # FORÇADO A FICAR EM BRANCO
             'Centro de Custo Débito': '',
             'Centro de Custo Crédito': '',
             'Status Conciliação': row['Status'] 
