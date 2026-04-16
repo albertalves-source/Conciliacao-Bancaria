@@ -203,7 +203,7 @@ def extrair_dados_arquivo(file, mapa_bancos, mapa_imp, usar_ia, termos_ignorar):
     return transacoes
 
 # --- EXPORTAÇÃO TXT (FORMATO EXATO DO DOMÍNIO CLÁSSICO) ---
-def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
+def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa, codigos_bancos_atuais):
     linhas = []
     
     def extrair_conta_limpa(texto):
@@ -237,16 +237,31 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
     seq = 1
     for idx, row in df_valido.iterrows():
         val = limpar_valor(row['Valor Total'])
-        val_entrada = limpar_valor(row.get('Entradas', 0))
         if val <= 0: continue
-        
-        # Inteligência PAGTO/RECBTO + NFS
-        tipo_hist = "RECBTO" if val_entrada > 0 else "PAGTO"
-        nota_val = str(row.get('Nota', '-')).strip()
-        texto_nota = f" NFS {nota_val}" if nota_val and nota_val != '-' else ""
         
         cod_deb = extrair_conta_limpa(row['Débito'])
         cod_cred = extrair_conta_limpa(row['Crédito'])
+        
+        nota_val = str(row.get('Nota', '-')).strip()
+        texto_nota = f" NFS {nota_val}" if nota_val and nota_val != '-' else ""
+        status = str(row.get('Status', ''))
+        favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
+        if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
+        
+        # Inteligência PAGTO/RECBTO baseada ESTRITAMENTE na conta contábil (Débito/Crédito)
+        if "Domínio" in status:
+            prefixo = texto_nota.strip()
+            hist_texto = f"{prefixo} - {favorecido.upper()}" if prefixo else favorecido.upper()
+        else:
+            if cod_deb in codigos_bancos_atuais:
+                tipo_hist = "RECBTO" # Banco sendo debitado (Ativo aumenta) = Recebimento
+            elif cod_cred in codigos_bancos_atuais:
+                tipo_hist = "PAGTO"  # Banco sendo creditado (Ativo diminui) = Pagamento
+            else:
+                val_entrada = limpar_valor(row.get('Entradas', 0))
+                tipo_hist = "RECBTO" if val_entrada > 0 else "PAGTO"
+                
+            hist_texto = f"{tipo_hist}{texto_nota} - {favorecido.upper()}"
         
         data_lanc = row['Data Excel'] if row['Data Excel'] != '-' else row['Data PDF']
         try:
@@ -254,12 +269,6 @@ def gerar_txt_dominio(df_conciliado, cod_empresa, cnpj_empresa):
         except:
             data_str = dt_ini
             
-        favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
-        if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
-        
-        # Novo Padrão: PAGTO NFS 1000 - FORNECEDOR
-        hist_texto = f"{tipo_hist}{texto_nota} - {favorecido.upper()}"
-        
         linha02 = f"02{str(seq).zfill(7)}X{data_str}".ljust(150)
         linhas.append(linha02)
         seq += 1
@@ -414,7 +423,6 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'X7 ASSESSORIA': '1235',
             'JOSE EDSON VIEIRA DOS SANTOS': '1236',
             'DR SERVIÇOS LTDA': '1243',
-            'LEGITIMUZ TECNOLOGIA LTDA': '1372',
             'TALKING & GAMING LTDA': '1261',
             'JOSE FRANCISCO DA SILVA JUNIOR': '1262',
             'LUCAS DANTAS PONTES': '1263',
@@ -458,7 +466,6 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'GABRIEL ALMEIDA RADICA DA SILVA': '1302',
             'DIEGO C. DOS SANTOS COMERCIO': '1303',
             'RAFAEL DIEGO KREHNKE GONCALVES': '1304',
-            'AVANT EXPANSAO DE FRANQUIAS LTDA': '1312',
             'DANTAS CM & AM LTDA': '1313',
             'TAISSUKE LOCACOES LTDA': '1557',
             'JOYO TECNOLOGIA BRASIL LTDA.': '1315',
@@ -467,7 +474,7 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             'AFILIAPIX SOLUCOES EM MARKETING E TECNOLOGIA LTDA': '1318',
             'CHECKMATE MARKETING DIGITAL LTDA': '1319',
             'STEPHANY DOS SANTOS REIS': '1320',
-            'BRAFIN SOLUCOES, INTERMEDIACAO E PAGAMENTOS LTDA': '1321',
+            'BRAFIN SOLUCOES, INTERMEDIACAO E PAGAMENTOS LTDA': '1412',
             'CAMPOS EMPREENDIMENTOS E TECNOLOGIA LTDA': '1322',
             'DOM - ASSESSORIA ESPORTIVA E EMPRESARIAL LTDA': '1323',
             'FLUE AGENCIA DIGITAL LTDA': '1324',
@@ -1091,7 +1098,7 @@ BANCO_DE_DADOS_EMPRESAS_INICIAL = {
             "VM CONSTRUÇÕES E SO": "680",
             "NEVES E MONTEIRO": "681",
             "J CARLOS COMERCIO ATACADISTA DE MOVEIS EIRELI": "685",
-            "SPORTRADAR BRAZIL LTDA": "708",
+            "SPORTRADAR BRASIL LTDA": "708",
             "RIOPAG S/A": "853",
             "AH MARKETING DIGITAL LTDA.": "710",
             "BRUNO MOURA SILVA": "711",
@@ -1252,8 +1259,8 @@ with st.sidebar:
                     "codigo_dominio": novo_cod_dominio,
                     "cnpj": novo_cnpj,
                     "codigo_matriz_filial": novo_cod_matriz,
-                    "impostos": {'0561': {'n': 'IRRF Padrão', 'c': ''}}, 
-                    "bancos": {novo_banco_nome.upper() if novo_banco_nome else 'BANCO': {'n': novo_banco_nome if novo_banco_nome else 'Banco Padrão', 'r': novo_banco_conta if novo_banco_conta else ''}},
+                    "impostos": {'0561': {'n': 'IRRF Padrão', 'c': '9999'}}, 
+                    "bancos": {novo_banco_nome.upper() if novo_banco_nome else 'BANCO': {'n': novo_banco_nome if novo_banco_nome else 'Banco Padrão', 'r': novo_banco_conta if novo_banco_conta else '9999'}},
                     "fornecedores": {}
                 }
                 st.success(f"'{nova_emp}' registada com sucesso!")
@@ -1360,7 +1367,7 @@ if excel_file and receipt_files:
             if not c_d and ("data" in cl or "dt" in cl): c_d = c
             if not c_v and ("valor" in cl or "vlr" in cl or "total" in cl): c_v = c
             if not c_cli and any(x in cl for x in ["fornecedor", "cliente", "nome", "favorecido", "histórico", "historico", "complemento"]): c_cli = c
-            if not c_nota and any(x in cl for x in ["nota", "doc", "núm", "num"]): c_nota = c
+            if not c_nota and any(x in cl for x in ["nota", "doc", "nfs"]): c_nota = c
             if not c_cfop and "cfop" in cl: c_cfop = c
             
         if not c_d or not c_v:
@@ -1391,7 +1398,7 @@ if excel_file and receipt_files:
             if isinstance(nota_val, float) and nota_val.is_integer():
                 nota_val = int(nota_val)
             nota_ex = str(nota_val).replace('.0', '') if str(nota_val).endswith('.0') else str(nota_val)
-            if nota_ex == "nan": nota_ex = "-"
+            if nota_ex.lower() == "nan": nota_ex = "-"
             
             is_entrada_dom = False
             if c_cfop and not pd.isna(l.get(c_cfop, None)):
@@ -1473,7 +1480,7 @@ if excel_file and receipt_files:
                 fav_cli = str(l.get(c_cli, '')).upper() if c_cli else ""
                 
                 fav_cli_clean = normalizar_espacos(fav_cli)
-                conta_pendente = ''
+                conta_pendente = '9999'
                 if fav_cli_clean in mapa_forn_norm:
                     conta_pendente = mapa_forn_norm[fav_cli_clean]
                 else:
@@ -1498,10 +1505,10 @@ if excel_file and receipt_files:
             if "Pagar" in modo_conciliacao and is_credito_pdf: continue
             if "Receber" in modo_conciliacao and not is_credito_pdf: continue
             
-            b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': ''})
+            b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
             
             fav_pdf = normalizar_espacos(doc['Fav'])
-            conta_contrapartida = ''
+            conta_contrapartida = '9999'
             nome_contrapartida = doc['Fav']
             
             if fav_pdf in mapa_forn_norm: conta_contrapartida = mapa_forn_norm[fav_pdf]
@@ -1511,7 +1518,7 @@ if excel_file and receipt_files:
                         conta_contrapartida = f_conta
                         break
                         
-            regra_imp = mapa_imp.get(doc['Cod'], {'conta': '', 'nome': '-'})
+            regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
             str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
             
             str_banco = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
@@ -1553,7 +1560,7 @@ if excel_file and receipt_files:
     st.dataframe(styled, use_container_width=True)
     
     # ---------------------------------------------------------
-    # EXPORTAÇÃO COM FILTROS DE STATUS
+    # EXPORTAÇÃO COM FILTROS DE STATUS E BLINDAGEM DE CÓDIGOS
     # ---------------------------------------------------------
     st.divider()
     st.header("📥 Opções de Exportação")
@@ -1572,17 +1579,19 @@ if excel_file and receipt_files:
         df_export = df_export[df_export['Status'] == '✅ CONCILIADO']
     elif filtro_exportacao == "Apenas Pendentes (❌ Domínio e ⚠️ Extrato)":
         df_export = df_export[df_export['Status'] != '✅ CONCILIADO']
+        
+    codigos_bancos_atuais = [str(v['r']).strip() for v in config_atual["bancos"].values()]
     
     # 1. TXT (Domínio Antigo)
-    txt_content = gerar_txt_dominio(df_export, cod_dominio, cnpj_empresa)
+    txt_content = gerar_txt_dominio(df_export, cod_dominio, cnpj_empresa, codigos_bancos_atuais)
     nome_arquivo_txt = f"Importacao_Dominio_{empresa_selecionada.split()[0].upper()}.txt"
     txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
 
-    # 2. CSV (Domínio Novo)
+    # 2. CSV (Domínio Novo) - Blindado contra contas vazias ou com "0"
     def extrair_conta_limpa(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
-        cod = m.group(1) if m else ""
-        if cod == "0" or cod == "00": return ""
+        cod = m.group(1) if m else "9999"
+        if cod == "0" or cod == "00": return "9999"
         return cod
 
     df_valido = df_export[df_export['Valor Total'].apply(limpar_valor) > 0].copy()
@@ -1593,27 +1602,37 @@ if excel_file and receipt_files:
 
     for idx, row in df_valido.iterrows():
         val = limpar_valor(row['Valor Total'])
-        val_entrada = limpar_valor(row.get('Entradas', 0))
         if val <= 0: continue
-        
-        # LÓGICA DE PAGTO OU RECEBIMENTO COM NOTA
-        tipo_hist = "RECBTO" if val_entrada > 0 else "PAGTO"
-        nota_val = str(row.get('Nota', '-')).strip()
-        texto_nota = f" NFS {nota_val}" if nota_val and nota_val != '-' else ""
         
         cod_deb = extrair_conta_limpa(row['Débito'])
         cod_cred = extrair_conta_limpa(row['Crédito'])
         
+        nota_val = str(row.get('Nota', '-')).strip()
+        texto_nota = f" NFS {nota_val}" if nota_val and nota_val != '-' else ""
+        
+        status = str(row.get('Status', ''))
+        favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
+        if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
+        
+        if "Domínio" in status:
+            prefixo = texto_nota.strip()
+            hist_final = f"{prefixo} - {favorecido.upper()}" if prefixo else favorecido.upper()
+        else:
+            # Inteligência baseada puramente na conta do Banco
+            if cod_deb in codigos_bancos_atuais:
+                tipo_hist = "RECBTO"
+            elif cod_cred in codigos_bancos_atuais:
+                tipo_hist = "PAGTO"
+            else:
+                val_entrada = limpar_valor(row.get('Entradas', 0))
+                tipo_hist = "RECBTO" if val_entrada > 0 else "PAGTO"
+            
+            hist_final = f"{tipo_hist}{texto_nota} - {favorecido.upper()}"
+            
         data_lanc = row['Data Excel'] if row['Data Excel'] != '-' else row['Data PDF']
         try: data_str = datetime.strptime(str(data_lanc), '%d/%m/%Y').strftime('%d/%m/%Y')
         except: data_str = str(data_lanc)
             
-        favorecido = str(row['Favorecido']).split(' - ')[-1].strip()
-        if not favorecido or favorecido == "-": favorecido = "LANCAMENTO CONTABIL"
-        
-        # Junta o TIPO (PAGTO/RECBTO) + NOTA + NOME DO FORNECEDOR
-        hist_final = f"{tipo_hist}{texto_nota} - {favorecido.upper()}"
-        
         valor_formatado = f"{val:.2f}".replace('.', ',')
         
         linhas_dominio.append({
@@ -1624,7 +1643,7 @@ if excel_file and receipt_files:
             'Cód. Histórico': '',
             'Complemento Histórico': hist_final[:250],
             'Inicia Lote': '',
-            'Código Matriz/Filial': '', # FORÇADO A FICAR EM BRANCO
+            'Código Matriz/Filial': '',
             'Centro de Custo Débito': '',
             'Centro de Custo Crédito': '',
             'Status Conciliação': row['Status'] 
