@@ -1252,8 +1252,8 @@ with st.sidebar:
                     "codigo_dominio": novo_cod_dominio,
                     "cnpj": novo_cnpj,
                     "codigo_matriz_filial": novo_cod_matriz,
-                    "impostos": {'0561': {'n': 'IRRF Padrão', 'c': '9999'}}, 
-                    "bancos": {novo_banco_nome.upper() if novo_banco_nome else 'BANCO': {'n': novo_banco_nome if novo_banco_nome else 'Banco Padrão', 'r': novo_banco_conta if novo_banco_conta else '9999'}},
+                    "impostos": {'0561': {'n': 'IRRF Padrão', 'c': ''}}, 
+                    "bancos": {novo_banco_nome.upper() if novo_banco_nome else 'BANCO': {'n': novo_banco_nome if novo_banco_nome else 'Banco Padrão', 'r': novo_banco_conta if novo_banco_conta else ''}},
                     "fornecedores": {}
                 }
                 st.success(f"'{nova_emp}' registada com sucesso!")
@@ -1473,7 +1473,7 @@ if excel_file and receipt_files:
                 fav_cli = str(l.get(c_cli, '')).upper() if c_cli else ""
                 
                 fav_cli_clean = normalizar_espacos(fav_cli)
-                conta_pendente = '9999'
+                conta_pendente = ''
                 if fav_cli_clean in mapa_forn_norm:
                     conta_pendente = mapa_forn_norm[fav_cli_clean]
                 else:
@@ -1498,10 +1498,10 @@ if excel_file and receipt_files:
             if "Pagar" in modo_conciliacao and is_credito_pdf: continue
             if "Receber" in modo_conciliacao and not is_credito_pdf: continue
             
-            b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': '9999'})
+            b_inf = next((v for k, v in mapa_bancos.items() if k in str(doc['Banc']).upper()), {'nome': doc.get('Banc', 'BANCO'), 'reduzido': ''})
             
             fav_pdf = normalizar_espacos(doc['Fav'])
-            conta_contrapartida = '9999'
+            conta_contrapartida = ''
             nome_contrapartida = doc['Fav']
             
             if fav_pdf in mapa_forn_norm: conta_contrapartida = mapa_forn_norm[fav_pdf]
@@ -1511,7 +1511,7 @@ if excel_file and receipt_files:
                         conta_contrapartida = f_conta
                         break
                         
-            regra_imp = mapa_imp.get(doc['Cod'], {'conta': '9999', 'nome': '-'})
+            regra_imp = mapa_imp.get(doc['Cod'], {'conta': '', 'nome': '-'})
             str_imposto = formatar_codigo_nome(doc['Cod'], regra_imp['nome']) if regra_imp['nome'] != '-' else "-"
             
             str_banco = formatar_codigo_nome(b_inf['reduzido'], b_inf['nome'])
@@ -1581,8 +1581,8 @@ if excel_file and receipt_files:
     # 2. CSV (Domínio Novo)
     def extrair_conta_limpa(texto):
         m = re.search(r'^(\d+)', str(texto).strip())
-        cod = m.group(1) if m else "9999"
-        if cod == "0" or cod == "00": return "9999"
+        cod = m.group(1) if m else ""
+        if cod == "0" or cod == "00": return ""
         return cod
 
     df_valido = df_export[df_export['Valor Total'].apply(limpar_valor) > 0].copy()
@@ -1623,7 +1623,7 @@ if excel_file and receipt_files:
             'Valor': valor_formatado,
             'Cód. Histórico': '',
             'Complemento Histórico': hist_final[:250],
-            'Inicia Lote': lote_atual,
+            'Inicia Lote': '',
             'Código Matriz/Filial': '', # FORÇADO A FICAR EM BRANCO
             'Centro de Custo Débito': '',
             'Centro de Custo Crédito': '',
