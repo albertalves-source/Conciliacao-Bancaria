@@ -32,7 +32,7 @@ def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
     s = str(data_obj).strip()
     
-    # TRAVA DE SEGURANÇA: Trata formato ISO AAAA-MM-DD estritamente (evita inversão de dia/mês)
+    # Trava de segurança para formato ISO AAAA-MM-DD
     if re.match(r'^\d{4}-\d{2}-\d{2}$', s):
         try: return datetime.strptime(s, '%Y-%m-%d').date()
         except: pass
@@ -63,6 +63,21 @@ def normalizar_para_match(texto):
     for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "FILHO", "PARTICIPACOES", "SERVICOS", "COMERCIO", "MARKETING"]:
         txt = txt.replace(termo, "")
     return txt
+
+# BUSCA INTELIGENTE POR APROXIMAÇÃO (Corrige o problema de nomes cortados ou com sufixos)
+def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
+    if not nome_pesquisa: return ""
+    nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
+    
+    # 1. Tenta o match exato de string limpa
+    if nome_pesquisa_norm in dicionario_fornecedores:
+        return dicionario_fornecedores[nome_pesquisa_norm]
+        
+    # 2. Tenta por aproximação ou contenção mútua
+    for nome_bd_norm, codigo in dicionario_fornecedores.items():
+        if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm) or (nome_pesquisa_norm[:10] in nome_bd_norm):
+            return codigo
+    return ""
 
 # Varredura inteligente para ignorar linhas de cabeçalho administrativo do Domínio
 def carregar_fiscal_seguro(arquivo):
@@ -159,7 +174,7 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- CONFIGURAÇÃO INICIAL ---
+# --- CONFIGURAÇÃO DA BASE DE DADOS ---
 BANCO_DE_DADOS_EMPRESAS_INICIAL = {
     "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
         "bancos": {'Z.RO': {'n': 'Z.RO BANK', 'r': '1857'}},
@@ -186,7 +201,7 @@ with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo FORNEC BET DA SORTE (
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
-    # 1. Carrega Dicionário de Fornecedores do Arquivo Externo
+    # 1. Carrega Cadastro de Fornecedores Oficial
     if f_fornec.name.endswith('.csv'):
         try: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str, sep=None, engine='python')
         except: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str)
@@ -200,7 +215,7 @@ if f_fiscal and f_fornec and f_extratos:
             nome = str(r[1]).strip().upper()
             if cod and nome: fornec_map_bd[normalizar_para_match(nome)] = cod
 
-    # 2. Carrega Lançamentos Fiscais com a Trava ISO de Data Ativada
+    # 2. Carrega Lançamentos Fiscais de Entradas
     df_fiscal_bruto = carregar_fiscal_seguro(f_fiscal)
     
     entries_list = []
@@ -243,6 +258,7 @@ if f_fiscal and f_fornec and f_extratos:
         v_banco = trans['Total']
         is_credito = trans['Is_Credito']
         
+        # Tenta localizar uma correspondência no arquivo Fiscal
         match_fiscal = None
         for ent in entries_list:
             if ent['usado']: continue
@@ -263,13 +279,14 @@ if f_fiscal and f_fornec and f_extratos:
                 elif (abs(v_banco - ent['valor_bruto']) < 0.1 or abs(v_banco - v_liquido) < 0.1) and nome_bate:
                     match_fiscal = ent; ent['usado'] = True; break
 
-        # Resgata o código do Fornecedor baseado no Arquivo "FORNEC BET DA SORTE"
+        # CHAMADA CORRIGIDA: Agora busca por aproximação inteligente utilizando a nova função
         cod_forn_final = ""
         if match_fiscal:
-            cod_forn_final = fornec_map_bd.get(normalizar_para_match(match_fiscal['name_f']), match_fiscal['cod_f'])
-            if not cod_forn_final or cod_forn_final == '-': cod_forn_final = match_fiscal['cod_f']
+            cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd)
+            if not cod_forn_final or cod_forn_final == '-': 
+                cod_forn_final = match_fiscal['cod_f']
         else:
-            cod_forn_final = fornec_map_bd.get(fav_banco_norm, "")
+            cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd)
 
         if cod_forn_final == '-': cod_forn_final = ""
 
@@ -310,7 +327,7 @@ if f_fiscal and f_fornec and f_extratos:
     
     st.markdown("---")
     st.download_button(
-        label="📥 Baixar Planilha de Conciliação no Padrão Solicitado (.XLSX)",
+        label="📥 Baixar Planilha de Conciliação Corrigida v11.8 (.XLSX)",
         data=output.getvalue(),
         file_name=f"Conciliacao_Unificada_BetSorte_{datetime.now().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
