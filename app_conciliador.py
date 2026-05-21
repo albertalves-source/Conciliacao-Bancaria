@@ -174,7 +174,6 @@ with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SORTE 
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
-    # 1. Carrega Cadastro de Fornecedores para obter a Conta Contábil Correta
     if f_fornec.name.endswith('.csv'):
         try: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str, sep=None, engine='python')
         except: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str)
@@ -188,7 +187,6 @@ if f_fiscal and f_fornec and f_extratos:
             nome = str(r[1]).strip().upper()
             if cod and nome: fornec_map_bd[normalizar_para_match(nome)] = cod
 
-    # 2. Carrega e limpa o Relatório Fiscal de Entradas
     df_fiscal_bruto = carregar_fiscal_seguro(f_fiscal)
     
     entries_list = []
@@ -216,7 +214,7 @@ if f_fiscal and f_fornec and f_extratos:
             if 'IRRF' in tipo: current_entry['irrf'] = v_imp
             elif 'CRF' in tipo: current_entry['crf'] = v_imp
 
-    # 3. Processa Extratos Bancários (Chamada CORRIGIDA)
+    # --- CHAMADA CORRIGIDA AQUI (Substituído o nome da função antiga pela nova) ---
     extrato_lista = []
     for f in f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
@@ -224,7 +222,7 @@ if f_fiscal and f_fornec and f_extratos:
     # --- MATRIZ DE CONFRONTO UNIFICADA ---
     matriz_saida = []
     ids_extrato_usados = set()
-    red_banco = "8281458" # Conta Reduzida fixa do Z.ro Bank
+    red_banco = "8281458" 
 
     for ent in entries_list:
         name_norm = normalizar_para_match(ent['name_f'])
@@ -248,7 +246,6 @@ if f_fiscal and f_fornec and f_extratos:
                 elif (abs(trans['Total'] - v_bruto) < 0.1 or abs(trans['Total'] - v_liquido_esperado) < 0.1) and nome_bate:
                     match_banco = trans; ids_extrato_usados.add(i); break
 
-        # Resgata o código do Fornecedor direto do arquivo do BD de Contas
         cod_forn_final = fornec_map_bd.get(name_norm, ent['cod_f'])
         if not cod_forn_final or cod_forn_final == '-': cod_forn_final = ent['cod_f']
 
@@ -269,7 +266,6 @@ if f_fiscal and f_fornec and f_extratos:
                 'se é PAGTO OU RECB': 'PAGTO', 'N° da Nota': ent['nota'], 'Raz Social': ent['name_f']
             })
 
-    # Sobras do Extrato Bancário (Movimentações Financeiras sem Nota Fiscal)
     for i, trans in enumerate(extrato_lista):
         if i not in ids_extrato_usados:
             fav_norm = normalizar_para_match(trans['Fav'])
@@ -286,18 +282,18 @@ if f_fiscal and f_fornec and f_extratos:
 
     df_final = pd.DataFrame(matriz_saida)
     
-    # Reordenação exata requerida pelo leiaute de colunas do usuário (com Saída no singular)
+    # Organização estrita do leiaute requisitado (Saída no singular)
     colunas_leiaute = ['Data', 'Deb', 'Cred', 'Valor', 'Hist', 'Data do PAGTO', 'Cod forn Cont', 'Conta Red Banco', 'Saída', 'se é PAGTO OU RECB', 'N° da Nota', 'Raz Social']
     df_final = df_final[colunas_leiaute]
 
-    # Grid Visual Formatado para Monitoramento na Tela
+    # Grid de visualização da tela
     df_display = df_final.copy()
     for col in ['Valor', 'Saída']:
         df_display[col] = df_display[col].apply(formatar_moeda)
 
     st.dataframe(df_display, use_container_width=True)
     
-    # Geração nativa e blindada do arquivo .xlsx
+    # Geração nativa .xlsx
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False, sheet_name='Conciliado_Unificado')
