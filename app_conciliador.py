@@ -146,10 +146,22 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- INTERFACE ---
-st.subheader("🏦 Portal de Conciliação Contábil - Modelo 5 Colunas")
+# --- CONFIGURAÇÃO DA BASE DE DADOS ---
+BANCO_DE_DADOS_EMPRESAS_INICIAL = {
+    "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
+        "bancos": {'Z.RO': {'n': 'Z.RO BANK', 'r': '8281458'}},
+        "fornecedores": {}
+    }
+}
 
-with St.sidebar:
+if 'empresas_db' not in st.session_state:
+    st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
+
+empresa_selecionada = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
+config_atual = st.session_state['empresas_db'][empresa_selecionada]
+
+# --- CORREÇÃO DO ERRO DO MAIÚSCULO 'St' ---
+with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
     tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Dias:", 0, 30, 7)
@@ -158,11 +170,10 @@ with St.sidebar:
 
 col1, col2, col3 = st.columns(3)
 with col1: f_fiscal = st.file_uploader("📂 1. Relatório de Entradas (Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SOU RE (.csv/.xls)", type=["xlsx","xls","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
-    # 1. Cadastro de Fornecedores
     if f_fornec.name.endswith('.csv'):
         try: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str, sep=None, engine='python')
         except: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str)
@@ -176,7 +187,6 @@ if f_fiscal and f_fornec and f_extratos:
             nome = str(r[1]).strip().upper()
             if cod and nome: fornec_map_bd[normalizar_para_match(nome)] = cod
 
-    # 2. Relatório Fiscal de Entradas
     df_fiscal_bruto = carregar_fiscal_seguro(f_fiscal)
     
     entries_list = []
@@ -204,15 +214,14 @@ if f_fiscal and f_fornec and f_extratos:
             if 'IRRF' in tipo: current_entry['irrf'] = v_imp
             elif 'CRF' in tipo: current_entry['crf'] = v_imp
 
-    # 3. Processa Extratos Bancários
     extrato_lista = []
     for f in f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
-    # --- PROCESSAMENTO DO NOVO PADRÃO DE 5 COLUNAS ---
+    # --- MATRIZ DE CONFRONTO UNIFICADA ---
     matriz_saida = []
     ids_extrato_usados = set()
-    red_banco = "1857" # Alterado para 1857 conforme novo padrão solicitado
+    red_banco = "1857" 
 
     for ent in entries_list:
         name_norm = normalizar_para_match(ent['name_f'])
@@ -253,14 +262,12 @@ if f_fiscal and f_fornec and f_extratos:
                     'Saídas': match_banco['Total'], 'Histórico': f"PAGT {texto_nota}{ent['name_f']}".strip()
                 })
         else:
-            # Nota Fiscal pendente (Só no Domínio)
             texto_nota = f"NF {ent['nota']} " if ent['nota'] != '-' else ""
             matriz_saida.append({
                 'Data': ent['data_f'], 'Deb': cod_forn_final, 'Cred': '-',
                 'Saídas': v_bruto, 'Histórico': f"PAGT {texto_nota}{ent['name_f']} (PENDENTE BANCARIO)".strip()
             })
 
-    # Sobras do Extrato Bancário (Sem Nota)
     for i, trans in enumerate(extrato_lista):
         if i not in ids_extrato_usados:
             fav_norm = normalizar_para_match(trans['Fav'])
@@ -278,24 +285,22 @@ if f_fiscal and f_fornec and f_extratos:
                 })
 
     df_final = pd.DataFrame(matriz_saida)
-    
-    # Validação e ordenação rígida das 5 colunas do novo padrão
     colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
     df_final = df_final[colunas_leiaute]
 
-    # Grid Visual Formatado para a Tela (Troca ponto por vírgula na visualização)
+    # Grid de visualização da tela com formatação brasileira
     df_display = df_final.copy()
-    df_display['Saídas'] = df_display['Saídas'].apply(lambda x: f"{float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    df_display['Saídas'] = df_display['Saídas'].apply(formatar_moeda_br)
 
     st.dataframe(df_display, use_container_width=True)
     
-    # Geração física do arquivo Excel (.xlsx) mantendo floats nativos para o banco
+    # Geração nativa .xlsx de 5 colunas
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False, sheet_name='Conciliação')
     
     st.download_button(
-        label="📥 Baixar Planilha de Conciliação Requerida v11.8 (.XLSX)",
+        label="📥 Baixar Planilha de Conciliação Requerida (.XLSX)",
         data=output.getvalue(),
         file_name=f"Conciliacao_Unificada_BetSorte_{datetime.now().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
