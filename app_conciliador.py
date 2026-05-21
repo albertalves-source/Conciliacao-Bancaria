@@ -4,10 +4,11 @@ import re
 import io
 import csv
 import warnings
+import unicodedata
 from datetime import datetime
 
-# Configurações de Página
-st.set_page_config(page_title="Portal de Conciliação - Padrão 5 Colunas", layout="wide", page_icon="🏦")
+# Configurações de Página do Streamlit
+st.set_page_config(page_title="Portal de Conciliação - Padrão de Postagem 5 Colunas", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
 # --- FUNÇÕES DE APOIO ---
@@ -29,19 +30,26 @@ def limpar_valor(v):
 
 def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
+    s = str(data_obj).strip()
+    
+    # TRAVA DE SEGURANÇA: Trata formato ISO AAAA-MM-DD estritamente (evita inversão de dia/mês)
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', s):
+        try: return datetime.strptime(s, '%Y-%m-%d').date()
+        except: pass
+        
+    # Trata formato clássico brasileiro DD/MM/AAAA
+    if re.match(r'^\d{2}/\d{2}/\d{4}$', s):
+        try: return datetime.strptime(s, '%d/%m/%Y').date()
+        except: pass
+        
     try:
-        num = float(data_obj)
+        num = float(s)
         if num > 10000:
             return pd.to_datetime(num, unit='D', origin='1899-12-30').date()
     except: pass
-    try: 
-        return pd.to_datetime(data_obj, dayfirst=True).date()
-    except:
-        match = re.search(r'(\d{2}/\d{2}/\d{4})', str(data_obj))
-        if match: return datetime.strptime(match.group(1), '%d/%m/%Y').date()
-        match_iso = re.search(r'(\d{4}-\d{2}-\d{2})', str(data_obj))
-        if match_iso: return datetime.strptime(match_iso.group(1), '%Y-%m-%d').date()
-        return None
+    
+    try: return pd.to_datetime(s, dayfirst=True).date()
+    except: return None
 
 def normalizar_espacos(texto):
     if not isinstance(texto, str): return ""
@@ -49,9 +57,14 @@ def normalizar_espacos(texto):
 
 def normalizar_para_match(texto):
     if not texto: return ""
-    return re.sub(r'[\s\-,.\/]', '', str(texto).upper().strip())
+    txt = str(texto).upper().strip()
+    txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
+    txt = re.sub(r'[\s\-,.\/]', '', txt)
+    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "FILHO", "PARTICIPACOES", "SERVICOS", "COMERCIO", "MARKETING"]:
+        txt = txt.replace(termo, "")
+    return txt
 
-# Varredura inteligente para pular linhas de metadados do Domínio
+# Varredura inteligente para ignorar linhas de cabeçalho administrativo do Domínio
 def carregar_fiscal_seguro(arquivo):
     arquivo.seek(0)
     if arquivo.name.lower().endswith('.csv'):
@@ -122,7 +135,7 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 if any(x in desc_txt for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
                                 if any(t in desc_txt for t in termos_ignorar if t): continue
                                 
-                                is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA"])
+                                is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA", "PIX DEVOLVIDO"])
                                 val_final = abs(limpar_valor(sub_valores[k])) if k < len(sub_valores) else 0.0
                                 
                                 if val_final > 0:
@@ -146,10 +159,10 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- CONFIGURAÇÃO DA BASE DE DADOS ---
+# --- CONFIGURAÇÃO INICIAL ---
 BANCO_DE_DADOS_EMPRESAS_INICIAL = {
     "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
-        "bancos": {'Z.RO': {'n': 'Z.RO BANK', 'r': '8281458'}},
+        "bancos": {'Z.RO': {'n': 'Z.RO BANK', 'r': '1857'}},
         "fornecedores": {}
     }
 }
@@ -160,20 +173,20 @@ if 'empresas_db' not in st.session_state:
 empresa_selecionada = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
 config_atual = st.session_state['empresas_db'][empresa_selecionada]
 
-# --- CORREÇÃO DO ERRO DO MAIÚSCULO 'St' ---
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
     tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Dias:", 0, 30, 7)
-    ignorar_txt = st.text_area("Filtros de Exclusão do Extrato:", "SALDO INICIAL, SALDO FINAL, TRANSFERENCIA INTERNA ENTRE CONTAS")
+    ignorar_txt = st.text_area("Filtros de Exclusão do Extrato:", "SALDO INICIAL, SALDO FINAL, TOTAL ACUMULADOR")
     termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
 
 col1, col2, col3 = st.columns(3)
-with col1: f_fiscal = st.file_uploader("📂 1. Relatório de Entradas (Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
+with col1: f_fiscal = st.file_uploader("📂 1. Planilha de Entradas (Relatório Fiscal)", type=["xlsx","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
+    # 1. Carrega Dicionário de Fornecedores do Arquivo Externo
     if f_fornec.name.endswith('.csv'):
         try: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str, sep=None, engine='python')
         except: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str)
@@ -187,6 +200,7 @@ if f_fiscal and f_fornec and f_extratos:
             nome = str(r[1]).strip().upper()
             if cod and nome: fornec_map_bd[normalizar_para_match(nome)] = cod
 
+    # 2. Carrega Lançamentos Fiscais com a Trava ISO de Data Ativada
     df_fiscal_bruto = carregar_fiscal_seguro(f_fiscal)
     
     entries_list = []
@@ -199,13 +213,13 @@ if f_fiscal and f_fornec and f_extratos:
             nome_f = str(row.get('nome_fornecedor', '')).strip().upper()
             
             current_entry = {
-                'data_f': dt_obj.strftime('%d/%m/%Y') if dt_obj else '-',
                 'dt_obj': dt_obj,
                 'nota': str(row.get('doc', '-')).split('.')[0],
                 'cod_f': str(row.get('codigo_fornecedor_doc', '-')).split('.')[0],
                 'name_f': nome_f,
                 'valor_bruto': v_bruto,
-                'irrf': 0.0, 'crf': 0.0
+                'irrf': 0.0, 'crf': 0.0,
+                'usado': False
             }
             entries_list.append(current_entry)
         elif current_entry is not None and pd.isna(row.get('codigo_lancamento')) and pd.notna(row.get('tipo_imposto')):
@@ -214,93 +228,89 @@ if f_fiscal and f_fornec and f_extratos:
             if 'IRRF' in tipo: current_entry['irrf'] = v_imp
             elif 'CRF' in tipo: current_entry['crf'] = v_imp
 
+    # 3. Processa Extratos Bancários
     extrato_lista = []
     for f in f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
-    # --- MATRIZ DE CONFRONTO UNIFICADA ---
+    # --- MOTOR DE VARREDURA CRONOLÓGICA DO EXTRATO BANCÁRIO ---
     matriz_saida = []
     ids_extrato_usados = set()
     red_banco = "1857" 
 
-    for ent in entries_list:
-        name_norm = normalizar_para_match(ent['name_f'])
-        v_bruto = ent['valor_bruto']
-        v_liquido_esperado = v_bruto - ent['irrf'] - ent['crf']
+    for trans in extrato_lista:
+        fav_banco_norm = normalizar_para_match(trans['Fav'])
+        v_banco = trans['Total']
+        is_credito = trans['Is_Credito']
         
-        match_banco = None
-        for i, trans in enumerate(extrato_lista):
-            if i in ids_extrato_usados: continue
-            fav_norm = normalizar_para_match(trans['Fav'])
+        match_fiscal = None
+        for ent in entries_list:
+            if ent['usado']: continue
+            if ent['valor_bruto'] != 0.0 and is_credito: continue 
             
-            nome_bate = (name_norm[:10] in fav_norm) or (fav_norm[:10] in name_norm)
+            nome_f_norm = normalizar_para_match(ent['name_f'])
+            nome_bate = (nome_f_norm[:8] in fav_banco_norm) or (fav_banco_norm[:8] in nome_f_norm)
+            
             try:
-                dt_banco = datetime.strptime(trans['Data'], '%d/%m/%Y').date()
-                dif_dias = abs((ent['dt_obj'] - dt_banco).days) if ent['dt_obj'] else 999
+                dt_banco_obj = datetime.strptime(trans['Data'], '%d/%m/%Y').date()
+                dif_dias = abs((ent['dt_obj'] - dt_banco_obj).days) if ent['dt_obj'] else 999
             except: dif_dias = 999
             
             if dif_dias <= tolerancia_dias:
-                if v_bruto == 0.0 and nome_bate and not trans['Is_Credito']:
-                    match_banco = trans; ids_extrato_usados.add(i); break
-                elif (abs(trans['Total'] - v_bruto) < 0.1 or abs(trans['Total'] - v_liquido_esperado) < 0.1) and nome_bate:
-                    match_banco = trans; ids_extrato_usados.add(i); break
+                v_liquido = ent['valor_bruto'] - ent['irrf'] - ent['crf']
+                if ent['valor_bruto'] == 0.0 and nome_bate:
+                    match_fiscal = ent; ent['usado'] = True; break
+                elif (abs(v_banco - ent['valor_bruto']) < 0.1 or abs(v_banco - v_liquido) < 0.1) and nome_bate:
+                    match_fiscal = ent; ent['usado'] = True; break
 
-        cod_forn_final = fornec_map_bd.get(name_norm, ent['cod_f'])
-        if not cod_forn_final or cod_forn_final == '-': cod_forn_final = ent['cod_f']
-
-        if match_banco:
-            is_credito = match_banco['Is_Credito']
-            if is_credito:
-                matriz_saida.append({
-                    'Data': match_banco['Data'], 'Deb': '', 'Cred': red_banco,
-                    'Saídas': match_banco['Total'], 'Histórico': f"RECB {ent['name_f']}".strip()
-                })
-            else:
-                texto_nota = f"NF {ent['nota']} " if ent['nota'] != '-' else ""
-                matriz_saida.append({
-                    'Data': match_banco['Data'], 'Deb': cod_forn_final, 'Cred': red_banco,
-                    'Saídas': match_banco['Total'], 'Histórico': f"PAGT {texto_nota}{ent['name_f']}".strip()
-                })
+        # Resgata o código do Fornecedor baseado no Arquivo "FORNEC BET DA SORTE"
+        cod_forn_final = ""
+        if match_fiscal:
+            cod_forn_final = fornec_map_bd.get(normalizar_para_match(match_fiscal['name_f']), match_fiscal['cod_f'])
+            if not cod_forn_final or cod_forn_final == '-': cod_forn_final = match_fiscal['cod_f']
         else:
-            texto_nota = f"NF {ent['nota']} " if ent['nota'] != '-' else ""
+            cod_forn_final = fornec_map_bd.get(fav_banco_norm, "")
+
+        if cod_forn_final == '-': cod_forn_final = ""
+
+        # --- PROCESSAMENTO EXATO SEGUINDO SEU PADRÃO HISTÓRICO ---
+        if is_credito:
             matriz_saida.append({
-                'Data': ent['data_f'], 'Deb': cod_forn_final, 'Cred': '-',
-                'Saídas': v_bruto, 'Histórico': f"PAGT {texto_nota}{ent['name_f']} (PENDENTE BANCARIO)".strip()
+                'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
+                'Histórico': f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}".strip()
+            })
+        else:
+            if match_fiscal and match_fiscal['nota'] != '-':
+                txt_hist = f"PAGT NF {match_fiscal['nota']} {match_fiscal['name_f']}"
+            elif match_fiscal:
+                txt_hist = f"PAGT {match_fiscal['name_f']}"
+            else:
+                txt_hist = f"PAGT {trans['Fav']}"
+                
+            matriz_saida.append({
+                'Data': trans['Data'], 'Deb': cod_forn_final if cod_forn_final else '', 'Cred': red_banco, 'Saídas': v_banco,
+                'Histórico': normalizar_espacos(txt_hist)
             })
 
-    for i, trans in enumerate(extrato_lista):
-        if i not in ids_extrato_usados:
-            fav_norm = normalizar_para_match(trans['Fav'])
-            cod_forn_final = fornec_map_bd.get(fav_norm, '')
-            
-            if trans['Is_Credito']:
-                matriz_saida.append({
-                    'Data': trans['Data'], 'Deb': '', 'Cred': red_banco,
-                    'Saídas': trans['Total'], 'Histórico': f"RECB {trans['Fav']}".strip()
-                })
-            else:
-                matriz_saida.append({
-                    'Data': trans['Data'], 'Deb': cod_forn_final if cod_forn_final else '', 'Cred': red_banco,
-                    'Saídas': trans['Total'], 'Histórico': f"PAGT {trans['Fav']}".strip()
-                })
-
+    # Ordenação das 5 colunas do leiaute contábil
     df_final = pd.DataFrame(matriz_saida)
     colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
     df_final = df_final[colunas_leiaute]
 
-    # Grid de visualização da tela com formatação brasileira
+    # Grid de visualização em tela com formatação brasileira
     df_display = df_final.copy()
     df_display['Saídas'] = df_display['Saídas'].apply(formatar_moeda_br)
 
     st.dataframe(df_display, use_container_width=True)
     
-    # Geração nativa .xlsx de 5 colunas
+    # Geração física da planilha Excel (.XLSX) - Preserva os floats nativos
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False, sheet_name='Conciliação')
     
+    st.markdown("---")
     st.download_button(
-        label="📥 Baixar Planilha de Conciliação Requerida (.XLSX)",
+        label="📥 Baixar Planilha de Conciliação no Padrão Solicitado (.XLSX)",
         data=output.getvalue(),
         file_name=f"Conciliacao_Unificada_BetSorte_{datetime.now().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
