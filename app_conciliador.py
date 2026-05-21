@@ -147,8 +147,19 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- INTERFACE ---
-st.subheader("🏦 Portal de Conciliação Contábil Completa")
+# --- CONFIGURAÇÃO DA BASE DE DADOS ---
+BANCO_DE_DADOS_EMPRESAS_INICIAL = {
+    "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
+        "bancos": {'Z.RO': {'n': 'Z.RO BANK', 'r': '8281458'}},
+        "fornecedores": {}
+    }
+}
+
+if 'empresas_db' not in st.session_state:
+    st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
+
+empresa_selecionada = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
+config_atual = st.session_state['empresas_db'][empresa_selecionada]
 
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
@@ -159,7 +170,7 @@ with st.sidebar:
 
 col1, col2, col3 = st.columns(3)
 with col1: f_fiscal = st.file_uploader("📂 1. Relatório de Entradas (Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SOU RE (.csv/.xls)", type=["xlsx","xls","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
@@ -205,15 +216,15 @@ if f_fiscal and f_fornec and f_extratos:
             if 'IRRF' in tipo: current_entry['irrf'] = v_imp
             elif 'CRF' in tipo: current_entry['crf'] = v_imp
 
-    # 3. Processa Extratos Bancários
+    # 3. Processa Extratos Bancários (Chamada CORRIGIDA)
     extrato_lista = []
     for f in f_extratos:
-        extrato_lista.extend(extrair_dados_pdf_offline(f, termos_ignorar))
+        extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
-    # --- MATRIZ DE POSTAGEM E CONCRONTO ---
+    # --- MATRIZ DE CONFRONTO UNIFICADA ---
     matriz_saida = []
     ids_extrato_usados = set()
-    red_banco = "8281458" # Conta Reduzida fixa da conta Z.ro Bank
+    red_banco = "8281458" # Conta Reduzida fixa do Z.ro Bank
 
     for ent in entries_list:
         name_norm = normalizar_para_match(ent['name_f'])
@@ -247,14 +258,14 @@ if f_fiscal and f_fornec and f_extratos:
                 'Data': ent['data_f'], 'Deb': cod_forn_final if is_pagto == "PAGTO" else red_banco,
                 'Cred': red_banco if is_pagto == "PAGTO" else "4101", 'Valor': v_bruto if v_bruto > 0 else match_banco['Total'],
                 'Hist': f"VLR REF CONCILIACAO NF {ent['nota']} - {ent['name_f']}", 'Data do PAGTO': match_banco['Data'],
-                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saídas': match_banco['Total'] if is_pagto == "PAGTO" else 0.0,
+                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saída': match_banco['Total'] if is_pagto == "PAGTO" else 0.0,
                 'se é PAGTO OU RECB': is_pagto, 'N° da Nota': ent['nota'], 'Raz Social': ent['name_f']
             })
         else:
             matriz_saida.append({
                 'Data': ent['data_f'], 'Deb': cod_forn_final, 'Cred': '-', 'Valor': v_bruto,
                 'Hist': f"NF PENDENTE APENAS NO FISCAL (SEM DEBITO EM CONTA) - {ent['name_f']}", 'Data do PAGTO': '-',
-                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saídas': 0.0,
+                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saída': 0.0,
                 'se é PAGTO OU RECB': 'PAGTO', 'N° da Nota': ent['nota'], 'Raz Social': ent['name_f']
             })
 
@@ -269,19 +280,24 @@ if f_fiscal and f_fornec and f_extratos:
                 'Data': trans['Data'], 'Deb': cod_forn_final if (is_pagto == "PAGTO" and cod_forn_final != '-') else '9999',
                 'Cred': red_banco if is_pagto == "PAGTO" else '4101', 'Valor': trans['Total'],
                 'Hist': f"MOVIMENTO BANCARIO SEM NOTA FISCAL LANCADA - {trans['Fav']}", 'Data do PAGTO': trans['Data'],
-                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saídas': trans['Total'] if is_pagto == "PAGTO" else 0.0,
+                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saída': trans['Total'] if is_pagto == "PAGTO" else 0.0,
                 'se é PAGTO OU RECB': is_pagto, 'N° da Nota': '-', 'Raz Social': trans['Fav']
             })
 
     df_final = pd.DataFrame(matriz_saida)
     
-    # Reordenação exata requerida pelo leiaute de colunas do usuário
-    colunas_leiaute = ['Data', 'Deb', 'Cred', 'Valor', 'Hist', 'Data do PAGTO', 'Cod forn Cont', 'Conta Red Banco', 'Saídas', 'se é PAGTO OU RECB', 'N° da Nota', 'Raz Social']
+    # Reordenação exata requerida pelo leiaute de colunas do usuário (com Saída no singular)
+    colunas_leiaute = ['Data', 'Deb', 'Cred', 'Valor', 'Hist', 'Data do PAGTO', 'Cod forn Cont', 'Conta Red Banco', 'Saída', 'se é PAGTO OU RECB', 'N° da Nota', 'Raz Social']
     df_final = df_final[colunas_leiaute]
 
-    # Display e Download Nativo
-    st.dataframe(df_final, use_container_width=True)
+    # Grid Visual Formatado para Monitoramento na Tela
+    df_display = df_final.copy()
+    for col in ['Valor', 'Saída']:
+        df_display[col] = df_display[col].apply(formatar_moeda)
+
+    st.dataframe(df_display, use_container_width=True)
     
+    # Geração nativa e blindada do arquivo .xlsx
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False, sheet_name='Conciliado_Unificado')
