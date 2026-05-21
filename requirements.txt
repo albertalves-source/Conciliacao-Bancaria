@@ -4,3 +4,4 @@ pdfplumber
 xlsxwriter
 requests
 openpyxl
+PyPDF2
