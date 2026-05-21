@@ -7,16 +7,15 @@ import warnings
 from datetime import datetime
 
 # Configurações de Página
-st.set_page_config(page_title="Portal de Conciliação - Inteligência Contábil", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Portal de Conciliação - Padrão 5 Colunas", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
 # --- FUNÇÕES DE APOIO ---
-def formatar_moeda(v):
+def formatar_moeda_br(v):
     try:
         val = float(v)
-        if val == 0: return "-"
-        return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except: return "-"
+        return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except: return "0,00"
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
@@ -147,21 +146,10 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- CONFIGURAÇÃO DA BASE DE DADOS ---
-BANCO_DE_DADOS_EMPRESAS_INICIAL = {
-    "PIXBET SOLUCOES TECNOLOGICAS LTDA": {
-        "bancos": {'Z.RO': {'n': 'Z.RO BANK', 'r': '8281458'}},
-        "fornecedores": {}
-    }
-}
+# --- INTERFACE ---
+st.subheader("🏦 Portal de Conciliação Contábil - Modelo 5 Colunas")
 
-if 'empresas_db' not in st.session_state:
-    st.session_state['empresas_db'] = BANCO_DE_DADOS_EMPRESAS_INICIAL.copy()
-
-empresa_selecionada = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
-config_atual = st.session_state['empresas_db'][empresa_selecionada]
-
-with st.sidebar:
+with St.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
     tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Dias:", 0, 30, 7)
@@ -170,10 +158,11 @@ with st.sidebar:
 
 col1, col2, col3 = st.columns(3)
 with col1: f_fiscal = st.file_uploader("📂 1. Relatório de Entradas (Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Cadastro FORNEC BET DA SOU RE (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
+    # 1. Cadastro de Fornecedores
     if f_fornec.name.endswith('.csv'):
         try: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str, sep=None, engine='python')
         except: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str)
@@ -187,6 +176,7 @@ if f_fiscal and f_fornec and f_extratos:
             nome = str(r[1]).strip().upper()
             if cod and nome: fornec_map_bd[normalizar_para_match(nome)] = cod
 
+    # 2. Relatório Fiscal de Entradas
     df_fiscal_bruto = carregar_fiscal_seguro(f_fiscal)
     
     entries_list = []
@@ -214,15 +204,15 @@ if f_fiscal and f_fornec and f_extratos:
             if 'IRRF' in tipo: current_entry['irrf'] = v_imp
             elif 'CRF' in tipo: current_entry['crf'] = v_imp
 
-    # --- CHAMADA CORRIGIDA AQUI (Substituído o nome da função antiga pela nova) ---
+    # 3. Processa Extratos Bancários
     extrato_lista = []
     for f in f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
-    # --- MATRIZ DE CONFRONTO UNIFICADA ---
+    # --- PROCESSAMENTO DO NOVO PADRÃO DE 5 COLUNAS ---
     matriz_saida = []
     ids_extrato_usados = set()
-    red_banco = "8281458" 
+    red_banco = "1857" # Alterado para 1857 conforme novo padrão solicitado
 
     for ent in entries_list:
         name_norm = normalizar_para_match(ent['name_f'])
@@ -250,56 +240,62 @@ if f_fiscal and f_fornec and f_extratos:
         if not cod_forn_final or cod_forn_final == '-': cod_forn_final = ent['cod_f']
 
         if match_banco:
-            is_pagto = "PAGTO" if not match_banco['Is_Credito'] else "RECB"
-            matriz_saida.append({
-                'Data': ent['data_f'], 'Deb': cod_forn_final if is_pagto == "PAGTO" else red_banco,
-                'Cred': red_banco if is_pagto == "PAGTO" else "4101", 'Valor': v_bruto if v_bruto > 0 else match_banco['Total'],
-                'Hist': f"VLR REF CONCILIACAO NF {ent['nota']} - {ent['name_f']}", 'Data do PAGTO': match_banco['Data'],
-                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saída': match_banco['Total'] if is_pagto == "PAGTO" else 0.0,
-                'se é PAGTO OU RECB': is_pagto, 'N° da Nota': ent['nota'], 'Raz Social': ent['name_f']
-            })
+            is_credito = match_banco['Is_Credito']
+            if is_credito:
+                matriz_saida.append({
+                    'Data': match_banco['Data'], 'Deb': '', 'Cred': red_banco,
+                    'Saídas': match_banco['Total'], 'Histórico': f"RECB {ent['name_f']}".strip()
+                })
+            else:
+                texto_nota = f"NF {ent['nota']} " if ent['nota'] != '-' else ""
+                matriz_saida.append({
+                    'Data': match_banco['Data'], 'Deb': cod_forn_final, 'Cred': red_banco,
+                    'Saídas': match_banco['Total'], 'Histórico': f"PAGT {texto_nota}{ent['name_f']}".strip()
+                })
         else:
+            # Nota Fiscal pendente (Só no Domínio)
+            texto_nota = f"NF {ent['nota']} " if ent['nota'] != '-' else ""
             matriz_saida.append({
-                'Data': ent['data_f'], 'Deb': cod_forn_final, 'Cred': '-', 'Valor': v_bruto,
-                'Hist': f"NF PENDENTE APENAS NO FISCAL (SEM DEBITO EM CONTA) - {ent['name_f']}", 'Data do PAGTO': '-',
-                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saída': 0.0,
-                'se é PAGTO OU RECB': 'PAGTO', 'N° da Nota': ent['nota'], 'Raz Social': ent['name_f']
+                'Data': ent['data_f'], 'Deb': cod_forn_final, 'Cred': '-',
+                'Saídas': v_bruto, 'Histórico': f"PAGT {texto_nota}{ent['name_f']} (PENDENTE BANCARIO)".strip()
             })
 
+    # Sobras do Extrato Bancário (Sem Nota)
     for i, trans in enumerate(extrato_lista):
         if i not in ids_extrato_usados:
             fav_norm = normalizar_para_match(trans['Fav'])
-            cod_forn_final = fornec_map_bd.get(fav_norm, '-')
+            cod_forn_final = fornec_map_bd.get(fav_norm, '')
             
-            is_pagto = "PAGTO" if not trans['Is_Credito'] else "RECB"
-            matriz_saida.append({
-                'Data': trans['Data'], 'Deb': cod_forn_final if (is_pagto == "PAGTO" and cod_forn_final != '-') else '9999',
-                'Cred': red_banco if is_pagto == "PAGTO" else '4101', 'Valor': trans['Total'],
-                'Hist': f"MOVIMENTO BANCARIO SEM NOTA FISCAL LANCADA - {trans['Fav']}", 'Data do PAGTO': trans['Data'],
-                'Cod forn Cont': cod_forn_final, 'Conta Red Banco': red_banco, 'Saída': trans['Total'] if is_pagto == "PAGTO" else 0.0,
-                'se é PAGTO OU RECB': is_pagto, 'N° da Nota': '-', 'Raz Social': trans['Fav']
-            })
+            if trans['Is_Credito']:
+                matriz_saida.append({
+                    'Data': trans['Data'], 'Deb': '', 'Cred': red_banco,
+                    'Saídas': trans['Total'], 'Histórico': f"RECB {trans['Fav']}".strip()
+                })
+            else:
+                matriz_saida.append({
+                    'Data': trans['Data'], 'Deb': cod_forn_final if cod_forn_final else '', 'Cred': red_banco,
+                    'Saídas': trans['Total'], 'Histórico': f"PAGT {trans['Fav']}".strip()
+                })
 
     df_final = pd.DataFrame(matriz_saida)
     
-    # Organização estrita do leiaute requisitado (Saída no singular)
-    colunas_leiaute = ['Data', 'Deb', 'Cred', 'Valor', 'Hist', 'Data do PAGTO', 'Cod forn Cont', 'Conta Red Banco', 'Saída', 'se é PAGTO OU RECB', 'N° da Nota', 'Raz Social']
+    # Validação e ordenação rígida das 5 colunas do novo padrão
+    colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
     df_final = df_final[colunas_leiaute]
 
-    # Grid de visualização da tela
+    # Grid Visual Formatado para a Tela (Troca ponto por vírgula na visualização)
     df_display = df_final.copy()
-    for col in ['Valor', 'Saída']:
-        df_display[col] = df_display[col].apply(formatar_moeda)
+    df_display['Saídas'] = df_display['Saídas'].apply(lambda x: f"{float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
     st.dataframe(df_display, use_container_width=True)
     
-    # Geração nativa .xlsx
+    # Geração física do arquivo Excel (.xlsx) mantendo floats nativos para o banco
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_final.to_excel(writer, index=False, sheet_name='Conciliado_Unificado')
+        df_final.to_excel(writer, index=False, sheet_name='Conciliação')
     
     st.download_button(
-        label="📥 Baixar Planilha de Conciliação Requerida (.XLSX)",
+        label="📥 Baixar Planilha de Conciliação Requerida v11.8 (.XLSX)",
         data=output.getvalue(),
         file_name=f"Conciliacao_Unificada_BetSorte_{datetime.now().strftime('%Y%m%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
