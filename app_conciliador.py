@@ -1,319 +1,282 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import base64
-import json
-import io
-import PyPDF2
-import unicodedata
 import re
-import requests
+import io
+import warnings
 
-# --- UTILITÁRIOS ---
-class JSONParser:
-    @staticmethod
-    def extrair_json_puro(texto):
-        try:
-            match = re.search(r'\{.*\}', texto, re.DOTALL)
-            return match.group(0) if match else texto
-        except: return texto
+# Tenta importar bibliotecas extras de forma segura
+try:
+    import pdfplumber
+except ImportError:
+    st.error("Erro: A biblioteca 'pdfplumber' não foi encontrada. Instale-a para processar os extratos em PDF.")
 
-def limpar_cnpj(v): return "".join(filter(str.isdigit, str(v or "")))
-def formatar_valor(v): return f"{float(v):.2f}".replace('.', ',')
+# Configurações de Página
+st.set_page_config(page_title="Portal de Conciliação - Inteligência Contábil", layout="wide", page_icon="🏦")
+warnings.filterwarnings("ignore")
 
-def to_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Confronto')
-    return output.getvalue()
-
-# Inteligência para ler o relatório bruto exportado do sistema Domínio
-def carregar_planilha_segura(arquivo):
-    arquivo.seek(0)
-    if arquivo.name.lower().endswith('.csv'):
-        try:
-            df_temp = pd.read_csv(arquivo, header=None, dtype=str, sep=None, engine='python')
-        except:
-            arquivo.seek(0)
-            df_temp = pd.read_csv(arquivo, header=None, dtype=str)
-    else:
-        df_temp = pd.read_excel(arquivo, header=None, dtype=str)
-        
-    # Caça a linha onde o cabeçalho real começa
-    idx_header = 0
-    for i, row in df_temp.iterrows():
-        valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if "AC." in valores or "ACUMULADOR" in valores or "CNPJ" in valores or "FORNECEDOR" in valores:
-            idx_header = i
-            break
-            
-    df = df_temp.iloc[idx_header+1:].copy()
-    colunas_brutas = [str(c).strip().upper() for c in df_temp.iloc[idx_header].values]
-    
-    # Tratamento dinâmico para eliminar duplicidade da palavra "CÓDIGO" no Domínio
-    colunas_limpas = []
-    codigo_count = 0
-    total_codigos = len([x for x in colunas_brutas if x in ['CÓDIGO', 'CODIGO', 'COD']])
-    
-    for i, c in enumerate(colunas_brutas):
-        c_str = str(c).strip().upper()
-        if c_str in ['NAN', 'NONE', '']: 
-            colunas_limpas.append(f"COL_{i}")
-        elif c_str in ['CÓDIGO', 'CODIGO', 'COD']:
-            codigo_count += 1
-            if codigo_count == 2 or total_codigos == 1:
-                colunas_limpas.append('codigo_fornecedor')
-            else:
-                colunas_limpas.append('codigo_lancamento')
-        elif c_str in ['AC.', 'ACUMULADOR']: colunas_limpas.append('acumulador')
-        elif c_str in ['NOTA', 'DOC']: colunas_limpas.append('doc')
-        elif c_str in ['DATA']: colunas_limpas.append('data')
-        elif 'VALOR CONT' in c_str or c_str == 'VALOR_TOTAL': colunas_limpas.append('valor_total')
-        elif c_str == 'FORNECEDOR': colunas_limpas.append('nome_fornecedor')
-        elif c_str in ['CNPJ', 'CNPJ_FORN']: colunas_limpas.append('cnpj_forn')
-        else: 
-            colunas_limpas.append(c_str)
-            
-    df.columns = colunas_limpas
-        
-    # Se o Domínio não gerou coluna CNPJ, tenta extrair do nome do Fornecedor
-    if 'cnpj_forn' not in df.columns:
-        if 'nome_fornecedor' in df.columns:
-            def extrair_cnpj(texto):
-                nums = limpar_cnpj(str(texto))
-                return nums if len(nums) >= 11 else ""
-            df['cnpj_forn'] = df['nome_fornecedor'].apply(extrair_cnpj)
-        else:
-            df['cnpj_forn'] = ""
-            
-    # Limpar coluna de acumulador para evitar divergências
-    if 'acumulador' in df.columns:
-        def limpa_acum(v):
-            s = str(v).strip().upper()
-            if s == 'NAN' or s == 'NONE': return ''
-            if s.endswith('.0'): return s[:-2]
-            return s
-        df['acumulador'] = df['acumulador'].apply(limpa_acum)
-
-    # Assegurar que os valores financeiros são números formatados corretamente
-    if 'valor_total' in df.columns:
-        def to_float(x):
-            if pd.isna(x): return 0.0
-            s = str(x).strip()
-            if ',' in s and '.' in s: s = s.replace('.', '').replace(',', '.')
-            elif ',' in s: s = s.replace(',', '.')
-            try: return float(s)
-            except: return 0.0
-        df['valor_total'] = df['valor_total'].apply(to_float)
-        
-    # Limpeza de linhas de controle do Domínio
-    if 'nome_fornecedor' in df.columns:
-        df = df[~df['nome_fornecedor'].astype(str).str.upper().isin(['NAN', 'NONE', 'TOTAL ACUMULADOR', ''])]
-        df = df.dropna(subset=['nome_fornecedor'])
-
-    if 'codigo_fornecedor' not in df.columns:
-        df['codigo_fornecedor'] = "-"
-
-    return df
-
-# --- MOTORES DE LEITURA (PDF / IA) ---
-def extrair_dados_pdf_offline(file_name, file_bytes, cnpj_destino_usuario):
+# --- FUNÇÕES DE APOIO ---
+def formatar_moeda(v):
     try:
-        leitor = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        texto_bruto = " ".join([p.extract_text() or "" for p in leitor.pages])
-        if len(texto_bruto.strip()) < 50: return None, "PDF é imagem (Scan). Use MODO IA."
-        
-        texto_limpo = re.sub(r'\s+', ' ', texto_bruto).upper()
-        texto_limpo = ''.join(c for c in unicodedata.normalize('NFD', texto_limpo) if unicodedata.category(c) != 'Mn')
-        texto_denso = texto_limpo.replace(' ', '')
-        
-        dados = {"codigo_fornecedor": "-", "doc": None, "serie": "1", "data": None, "cnpj_forn": None, "valor_total": None, "acumulador": "1", "file_name": file_name}
-        
-        cnpj_alvo = limpar_cnpj(cnpj_destino_usuario)
-        docs = list(dict.fromkeys(re.findall(r'\d{14}|\d{11}', texto_denso)))
-        for d in docs:
-            if d != cnpj_alvo and d != "00000000000000" and not d.startswith("25155"):
-                dados["cnpj_forn"] = d
-                break
-        if not dados["cnpj_forn"]: dados["cnpj_forn"] = docs[0] if docs else "00000000000000"
+        val = float(v)
+        if val == 0: return "-"
+        return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except: return "-"
 
-        doc_str = None
-        for p in [r"NFS-E[^\d]{0,30}?0*(\d+)", r"NUMERO[^\d]{0,50}?0*(\d+)", r"NF-?E?\s*[:.-]?\s*0*(\d+)"]:
-            m = re.findall(p, texto_limpo)
-            validos = [x for x in m if x not in ['2024','2025','2026','0']]
-            if validos: {doc_str := validos[0]}; break
-        
-        if not doc_str:
-            nums = re.findall(r'\d+', file_name)
-            if nums: doc_str = max(nums, key=len)
+def limpar_valor(v):
+    if pd.isna(v): return 0.0
+    v_str = str(v).replace('R$', '').replace('$', '').replace(' ', '').strip()
+    if '.' in v_str and ',' in v_str:
+        v_str = v_str.replace('.', '').replace(',', '.')
+    elif ',' in v_str:
+        v_str = v_str.replace(',', '.')
+    try: return float(v_str)
+    except: return 0.0
 
-        if doc_str:
-            try: dados["doc"] = str(int(doc_str))
-            except: dados["doc"] = str(doc_str)
-        else:
-            dados["doc"] = "1"
-        
-        dt = re.search(r"(\d{2}/\d{2}/\d{4})", texto_denso)
-        dados["data"] = dt.group(1) if dt else datetime.now().strftime("%d/%m/%Y")
+def converter_data_dominio(data_obj):
+    if pd.isna(data_obj): return None
+    try:
+        num = float(data_obj)
+        if num > 10000:
+            return pd.to_datetime(num, unit='D', origin='1899-12-30').date()
+    except: pass
+    try: 
+        return pd.to_datetime(data_obj, dayfirst=True).date()
+    except:
+        match = re.search(r'(\d{2}/\d{2}/\d{4})', str(data_obj))
+        if match: return datetime.strptime(match.group(1), '%d/%m/%Y').date()
+        match_iso = re.search(r'(\d{4}-\d{2}-\d{2})', str(data_obj))
+        if match_iso: return datetime.strptime(match_iso.group(1), '%Y-%m-%d').date()
+        return None
 
-        v_matches = re.findall(r"(\d{1,10}(?:[.,]\d{3})*[.,]\d{2})", texto_limpo)
-        if v_matches:
-            vals = []
-            for v in v_matches:
-                try:
-                    vf = float(re.sub(r'[.,]', '', v[:-3]) + '.' + v[-2:])
-                    if 0.5 < vf < 9999999.0: vals.append(vf)
-                except: continue
-            if vals: dados["valor_total"] = max(vals)
+def normalizar_espacos(texto):
+    if not isinstance(texto, str): return ""
+    return " ".join(texto.upper().split())
 
-        return (dados, None) if dados["valor_total"] else (None, "Valor não encontrado.")
-    except Exception as e: return None, str(e)
+def extrair_dados_arquivo(file, termos_ignorar):
+    transacoes = []
+    if file.name.lower().endswith(".pdf"):
+        try:
+            with pdfplumber.open(file) as pdf:
+                for page in pdf.pages:
+                    texto_pagina = page.extract_text()
+                    if not texto_pagina: continue
+                    
+                    linhas_originais = texto_pagina.split('\n')
+                    linhas_agrupadas = []
+                    linha_temp = ""
+                    for l in linhas_originais:
+                        if re.search(r'^\s*\d{2}/\d{2}/\d{4}', l):
+                            if linha_temp: linhas_agrupadas.append(linha_temp)
+                            linha_temp = l
+                        else:
+                            linha_temp += " " + l
+                    if linha_temp: linhas_agrupadas.append(linha_temp)
+                    
+                    for linha in linhas_agrupadas:
+                        linha_upper = linha.upper()
+                        if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "RESUMO", "TOTAL ACUMULADOR"]): continue
+                        if any(t in linha_upper for t in termos_ignorar if t): continue
+                        
+                        is_credito = False
+                        if any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA"]):
+                            is_credito = True
+                        
+                        data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
+                        # REGEX BLINDADO: Captura o valor cheio sem cortar os milhares por causa do ponto brasileiro
+                        valor_match = re.findall(r'-?[\d.]*,\d{2}', linha)
+                        
+                        if data_match and valor_match:
+                            desc_bruta = linha.replace(data_match.group(1), "")
+                            for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
+                            
+                            nome_limpo = re.sub(r'[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}', '', desc_bruta.upper())
+                            nome_limpo = re.sub(r'\b[A-Z0-9]*\d[A-Z0-9]*\b', '', nome_limpo)
+                            for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "TRANSFERENCIA INTERNA", "R$", "RS", '",', '"']:
+                                nome_limpo = nome_limpo.replace(t, '')
+                            nome_limpo = normalizar_espacos(nome_limpo).strip('," ')
+                            
+                            if not nome_limpo or nome_limpo in ["-", ""]:
+                                nome_limpo = "PAGAMENTO DE BOLETO / TARIFA"
 
-# --- GERAÇÃO DOMÍNIO ---
-def gerar_registro_0000(cnpj): return f"|0000|{limpar_cnpj(cnpj)}|"
-def gerar_registro_1000(nf, obs):
-    dt, acum = nf.get('data',''), str(nf.get('acumulador','1'))
-    c = ["1000", "1", limpar_cnpj(nf.get('cnpj_forn','')), "", "1", acum, "", str(nf.get('doc','') or ""), "1", "", dt, dt, formatar_valor(nf.get('valor_total',0)), "", obs, "C", "","","","","","","","","","E"]
-    return "|" + "|".join(c[:25]) + "|" + "|" * 70
-def gerar_registro_1020(nf):
-    v = formatar_valor(nf.get('valor_total',0))
-    return f"|1020|1||{v}|0,00|0,00|0,00|0,00|0,00|0,00|{v}||||"
-def gerar_registro_1300(nf, obs):
-    return f"|1300|{nf.get('data','')}|55|5|{formatar_valor(nf.get('valor_total',0))}|1|{obs}|SISTEMA|"
+                            val = abs(limpar_valor(valor_match[0]))
+                            if val > 0:
+                                transacoes.append({
+                                    'Data': data_match.group(1), 
+                                    'Total': val,
+                                    'Fav': nome_limpo, 
+                                    'Is_Credito': is_credito
+                                })
+        except Exception as e: 
+            st.error(f"Erro ao ler PDF: {e}")
+            
+    return transacoes
 
-# --- INTERFACE ---
-st.set_page_config(page_title="Domínio Automator v11.8", layout="wide")
-st.title("⚡ Domínio Automator - V11.8")
+# --- INTERFACE STREAMLIT ---
+st.title("🏦 Conciliador Bancário Inteligente")
+st.markdown("Cruzamento automatizado entre Relatório de Entradas (Fiscal) e Extrato Bancário.")
 
 with st.sidebar:
-    ferramenta = st.radio("Módulo:", ["📄 1. Importar PDFs", "📊 2. Auditoria/Confronto Excel"])
-    st.markdown("---")
-    cnpj_alvo = st.text_input("CNPJ Destino", value="40633348000130")
-    texto_obs = st.text_input("Observação", value="IMPORTACAO AUTOMATICA")
-    if st.button("🗑️ Limpar"): st.rerun()
+    st.header("⚙️ Parâmetros de Ajuste")
+    ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
+    tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Dias:", 0, 30, 7)
+    
+    st.divider()
+    ignorar_txt = st.text_area("Ignorar no Extrato (Filtro):", "SALDO INICIAL, SALDO FINAL, TRANSFERENCIA INTERNA ENTRE CONTAS")
+    termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
 
-# --- MÓDULO 1: PDF ---
-if "1." in ferramenta:
-    st.subheader("Extração de PDFs")
-    arquivos = st.file_uploader("PDFs", type="pdf", accept_multiple_files=True)
-    if arquivos and st.button("Processar"):
-        notas, falhas = [], {}
-        for f in arquivos:
-            res, err = extrair_dados_pdf_offline(f.name, f.read(), cnpj_alvo)
-            if res: notas.append(res)
-            else: falhas[f.name] = err
-        st.session_state.notas = notas
-        if falhas: st.warning(f"Falhas em {len(falhas)} arquivos.")
+# --- UPLOAD DOS ARQUIVOS ---
+c1, c2 = st.columns(2)
+with c1: excel_file = st.file_uploader("📂 Planilha de Entradas (Relatório Fiscal)", type=["xlsx", "xls", "csv"])
+with c2: receipt_files = st.file_uploader("📄 Extrato do Banco (PDF)", type=["pdf"], accept_multiple_files=True)
 
-    if 'notas' in st.session_state:
-        df = pd.DataFrame(st.session_state.notas)
+if excel_file and receipt_files:
+    try:
+        if excel_file.name.endswith('.csv'):
+            df_dom = pd.read_csv(excel_file, sep=',', encoding='utf-8-sig')
+            if len(df_dom.columns) < 5:
+                excel_file.seek(0)
+                df_dom = pd.read_csv(excel_file, sep=';')
+        else:
+            df_dom = pd.read_excel(excel_file)
+    except Exception as e:
+        st.error(f"Erro ao ler arquivo fiscal: {e}")
+        st.stop()
+
+    # Extração dos dados do extrato
+    extrato_bancario = []
+    for f in receipt_files:
+        extrato_bancario.extend(extrair_dados_arquivo(f, termos_ignorar))
+
+    # --- MAPEAMENTO INTELIGENTE DE COLUNAS ---
+    df_dom.columns = [str(c).strip() for c in df_dom.columns]
+    
+    col_data = next((c for c in df_dom.columns if re.search(r'data', c, re.IGNORECASE)), None)
+    col_valor = next((c for c in df_dom.columns if re.search(r'valor contábil|valor_total|valor', c, re.IGNORECASE)), None)
+    col_forn = next((c for c in df_dom.columns if re.search(r'fornecedor|nome', c, re.IGNORECASE)), None)
+    col_nota = next((c for c in df_dom.columns if re.search(r'nota|documento', c, re.IGNORECASE)), None)
+    
+    # Captura precisa do CÓDIGO DO FORNECEDOR (Ignorando o primeiro código do lançamento)
+    colunas_lista = list(df_dom.columns)
+    col_codigo_forn = None
+    if col_forn:
+        idx_forn = colunas_lista.index(col_forn)
+        for j in range(idx_forn - 1, -1, -1):
+            if any(p in colunas_lista[j].upper() for p in ['CÓDIGO', 'CODIGO', 'COD']):
+                col_codigo_forn = colunas_lista[j]
+                break
+
+    matriz_final = []
+    ids_extrato_usados = set()
+
+    # --- PROCESSO DE CRUZA (PASSO 1: FISCAL) ---
+    for idx, row in df_dom.iterrows():
+        forn_fiscal = str(row.get(col_forn, ''))
+        if pd.isna(row.get(col_forn)) or any(x in forn_fiscal.upper() for x in ["TOTAL", "ACOMPANHAMENTO", "CÓDIGO", "NAN", "NONE"]):
+            continue
+            
+        forn_fiscal_clean = normalizar_espacos(forn_fiscal)
+        val_fiscal_bruto = abs(limpar_valor(row.get(col_valor, 0)))
+        data_fiscal_obj = converter_data_dominio(row.get(col_data))
+        nota_fiscal = str(row.get(col_nota, "-")).split('.')[0]
         
-        if 'doc' in df.columns: df['doc'] = df['doc'].astype(str)
-        if 'cnpj_forn' in df.columns: df['cnpj_forn'] = df['cnpj_forn'].astype(str)
-        if 'codigo_fornecedor' in df.columns: df['codigo_fornecedor'] = df['codigo_fornecedor'].astype(str)
-            
-        ordem_cols = ['codigo_fornecedor', 'doc', 'cnpj_forn', 'valor_total', 'data', 'serie', 'acumulador', 'file_name']
-        ordem_cols = [c for c in ordem_cols if c in df.columns]
-        
-        st.dataframe(df[ordem_cols], use_container_width=True)
-        st.download_button("Baixar Excel", to_excel(df[ordem_cols]), "notas.xlsx")
+        # Puxa o código do fornecedor localizado pela proximidade do cabeçalho
+        cod_forn_real = str(row.get(col_codigo_forn, "-")).split('.')[0] if col_codigo_forn else "-"
 
-# --- MÓDULO 2: CONFRONTO ---
-elif "2." in ferramenta:
-    st.subheader("Auditoria de Acumuladores (Mês Atual vs Anterior)")
-    c1, c2 = st.columns(2)
-    with c1: f_atual = st.file_uploader("Excel Atual (ex: Março)", type=["xlsx","csv"])
-    with c2: f_base = st.file_uploader("Excel Anterior Base (ex: Fevereiro)", type=["xlsx","csv"])
+        # Tratamento de Impostos Retidos na linha (Caso haja)
+        val_irrf = abs(limpar_valor(row.get('Valor', 0))) if 'Valor' in df_dom.columns else 0.0
+        val_liquido_esperado = val_fiscal_bruto - val_irrf
 
-    if f_atual and f_base:
-        try:
-            df_at = carregar_planilha_segura(f_atual)
-            df_bs = carregar_planilha_segura(f_base)
+        match_banco = None
+        for i, trans in enumerate(extrato_bancario):
+            if i in ids_extrato_usados: continue
             
-            if 'acumulador' not in df_at.columns:
-                df_at['acumulador'] = "1"
+            nome_banco_clean = normalizar_espacos(trans['Fav'])
+            # Validação de nome por similaridade ou colagem mútua
+            nome_bate = (forn_fiscal_clean[:12] in nome_banco_clean) or (nome_banco_clean[:12] in forn_fiscal_clean)
             
-            if 'acumulador' in df_bs.columns:
-                df_bs['match_cnpj'] = df_bs.get('cnpj_forn', pd.Series(dtype=str)).apply(lambda x: limpar_cnpj(str(x)))
-                df_bs['match_nome'] = df_bs.get('nome_fornecedor', pd.Series(dtype=str)).apply(lambda x: str(x).strip().upper())
-                
-                map_by_cnpj = df_bs[df_bs['match_cnpj'] != ""].drop_duplicates('match_cnpj').set_index('match_cnpj')['acumulador'].to_dict()
-                map_by_nome = df_bs[df_bs['match_nome'] != "NAN"].drop_duplicates('match_nome').set_index('match_nome')['acumulador'].to_dict()
-                
-                def buscar_acumulador(row):
-                    cnpj = limpar_cnpj(str(row.get('cnpj_forn', '')))
-                    nome = str(row.get('nome_fornecedor', '')).strip().upper()
-                    
-                    if cnpj and cnpj in map_by_cnpj: return map_by_cnpj[cnpj]
-                    if nome and nome in map_by_nome: return map_by_nome[nome]
-                    return "NÃO ENCONTRADO"
-                
-                df_at['acumulador_anterior'] = df_at.apply(buscar_acumulador, axis=1)
-                
-                def verificar_status(row):
-                    ant = str(row['acumulador_anterior']).strip()
-                    atu = str(row['acumulador']).strip()
-                    if ant == "NÃO ENCONTRADO": return "🆕 NOVO"
-                    if ant == atu: return "✅ OK"
-                    return "⚠️ DIVERGENTE"
-                    
-                df_at['Status'] = df_at.apply(verificar_status, axis=1)
-                
-                st.info("💡 Clique na coluna 'Status' para ordenar. Avalie e edite os divergentes diretamente na coluna '✏️ AC (Mês Atual)'.")
-                
-                # --- BLINDAGEM ABSOLUTA CONTRA KEYERROR ---
-                # Força a criação das colunas com valor padrão caso não existam no arquivo subido
-                for col in ['Status', 'codigo_fornecedor', 'doc', 'nome_fornecedor', 'cnpj_forn', 'acumulador_anterior', 'acumulador', 'data']:
-                    if col not in df_at.columns:
-                        df_at[col] = "-"
-                if 'valor_total' not in df_at.columns:
-                    df_at['valor_total'] = 0.0
-                
-                cols_view = ['Status', 'codigo_fornecedor', 'doc', 'nome_fornecedor', 'cnpj_forn', 'acumulador_anterior', 'acumulador', 'valor_total', 'data']
-                
-                df_final = st.data_editor(
-                    df_at[cols_view],
-                    column_config={
-                        "Status": st.column_config.TextColumn("Status", disabled=True),
-                        "codigo_fornecedor": st.column_config.TextColumn("Cód. Forn.", disabled=True),
-                        "acumulador_anterior": st.column_config.TextColumn("🔍 AC (Mês Ant.)", disabled=True),
-                        "acumulador": st.column_config.TextColumn("✏️ AC (Mês Atual)"),
-                        "nome_fornecedor": st.column_config.TextColumn("Fornecedor", disabled=True),
-                        "cnpj_forn": st.column_config.TextColumn("CNPJ", disabled=True),
-                        "doc": st.column_config.TextColumn("Nota", disabled=True),
-                        "valor_total": st.column_config.NumberColumn("Valor R$", format="%.2f", disabled=True),
-                        "data": st.column_config.TextColumn("Data", disabled=True)
-                    },
-                    hide_index=True, use_container_width=True
-                )
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_btn1, col_btn2 = st.columns(2)
-                
-                with col_btn1:
-                    excel_data = to_excel(df_final)
-                    st.download_button(
-                        label="📥 Baixar Planilha Auditada (Excel)",
-                        data=excel_data,
-                        file_name=f"auditoria_{datetime.now().strftime('%d%m_%H%M')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                
-                with col_btn2:
-                    buf = [gerar_registro_0000(cnpj_alvo)]
-                    for _, nf in df_final.iterrows():
-                        n = nf.to_dict()
-                        buf.extend([gerar_registro_1000(n, texto_obs), gerar_registro_1020(n), gerar_registro_1300(n, texto_obs)])
-                    
-                    st.download_button(
-                        label="💾 Baixar Arquivo Domínio (TXT)",
-                        data="\r\n".join(buf),
-                        file_name=f"importacao_{datetime.now().strftime('%d%m_%H%M')}.txt",
-                        mime="text/plain",
-                        use_container_width=True
-                    )
+            try:
+                data_banco_obj = datetime.strptime(trans['Data'], '%d/%m/%Y').date()
+                dias_dif = abs((data_fiscal_obj - data_banco_obj).days) if data_fiscal_obj else 999
+            except: dias_dif = 999
+            
+            data_valida = dias_dif <= tolerancia_dias
 
-            else:
-                st.error("❌ O sistema não conseguiu achar a coluna do 'Acumulador' na planilha base.")
-        except Exception as e: st.error(f"Erro no processamento: {e}")
+            if data_valida:
+                # Regra 1: Valor zerado na nota mas tem movimento (Ex: KR3W)
+                if val_fiscal_bruto == 0.0 and nome_bate and not trans['Is_Credito']:
+                    match_banco = trans
+                    ids_extrato_usados.add(i)
+                    break
+                # Regra 2: Valor bate exato (Bruto)
+                elif abs(val_fiscal_bruto - trans['Total']) < 0.1 and (nome_bate or val_fiscal_bruto > 5000):
+                    match_banco = trans
+                    ids_extrato_usados.add(i)
+                    break
+                # Regra 3: Valor líquido bate por causa de impostos deduzidos
+                elif abs(val_liquido_esperado - trans['Total']) < 0.1 and val_irrf > 0:
+                    match_banco = trans
+                    ids_extrato_usados.add(i)
+                    break
+
+        if match_banco:
+            matriz_final.append({
+                'Data de Ref.': data_fiscal_obj.strftime('%d/%m/%Y') if data_fiscal_obj else match_banco['Data'],
+                'Tipo de Lançamento': 'Misto (NF + Pagamento)' if not match_banco['Is_Credito'] else 'Misto (NF + Recebimento)',
+                'Nº Nota / Doc': nota_fiscal,
+                'Cód. Forn.': cod_forn_real,
+                'Participante / Favorecido': forn_fiscal,
+                'Valor Nota (R$)': val_fiscal_bruto,
+                'Valor Saída (R$)': match_banco['Total'] if not match_banco['Is_Credito'] else 0.0,
+                'Valor Entrada (R$)': match_banco['Total'] if match_banco['Is_Credito'] else 0.0,
+                'Status / Classificação Contábil': '✅ CONCILIADO' if val_fiscal_bruto > 0 else '⚠️ CONCILIADO COM DIVERGÊNCIA VALOR FISCAL (R$ 0,00)'
+            })
+        else:
+            matriz_final.append({
+                'Data de Ref.': data_fiscal_obj.strftime('%d/%m/%Y') if data_fiscal_obj else '-',
+                'Tipo de Lançamento': 'Nota Fiscal',
+                'Nº Nota / Doc': nota_fiscal,
+                'Cód. Forn.': cod_forn_real,
+                'Participante / Favorecido': forn_fiscal,
+                'Valor Nota (R$)': val_fiscal_bruto,
+                'Valor Saída (R$)': 0.0,
+                'Valor Entrada (R$)': 0.0,
+                'Status / Classificação Contábil': '❌ Só no Domínio (Falta Saída Bancária)'
+            })
+
+    # --- PASSO 2: SOBRAS DO EXTRATO BANCÁRIO ---
+    for i, trans in enumerate(extrato_bancario):
+        if i not in ids_extrato_usados:
+            matriz_final.append({
+                'Data de Ref.': trans['Data'],
+                'Tipo de Lançamento': 'Recebimento' if trans['Is_Credito'] else 'Pagamento',
+                'Nº Nota / Doc': '-',
+                'Cód. Forn.': '-',
+                'Participante / Favorecido': trans['Fav'],
+                'Valor Nota (R$)': 0.0,
+                'Valor Saída (R$)': trans['Total'] if not trans['Is_Credito'] else 0.0,
+                'Valor Entrada (R$)': trans['Total'] if trans['Is_Credito'] else 0.0,
+                'Status / Classificação Contábil': '⚠️ Só no Extrato (Falta Lançar Nota Fiscal)'
+            })
+
+    # Exibição dos resultados na interface
+    df_resultado = pd.DataFrame(matriz_final)
+    
+    df_display = df_resultado.copy()
+    for col in ['Valor Nota (R$)', 'Valor Saída (R$)', 'Valor Entrada (R$)']:
+        df_display[col] = df_display[col].apply(formatar_moeda)
+
+    st.success("🏁 Conciliação processada!")
+    st.dataframe(df_display, use_container_width=True)
+
+    # --- EXPORTAÇÃO NATIVA PARA EXCEL (ABRE PERFEITO SEM BUG DE COLUNA UNICA) ---
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_resultado.to_excel(writer, index=False, sheet_name='Conciliação Completa')
+    b64 = base64.b64encode(output.getvalue()).decode()
+    
+    st.download_button(
+        label="📥 Baixar Planilha de Conciliação Corrigida (.XLSX)",
+        data=output.getvalue(),
+        file_name=f"Conciliacao_Unificada_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
