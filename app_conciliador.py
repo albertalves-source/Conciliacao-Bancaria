@@ -61,7 +61,6 @@ def carregar_planilha_segura(arquivo):
             colunas_limpas.append(f"COL_{i}")
         elif c_str in ['CÓDIGO', 'CODIGO', 'COD']:
             codigo_count += 1
-            # Se houver 2 colunas de código, a segunda (colada no Fornecedor) é o código correto do Fornecedor.
             if codigo_count == 2 or total_codigos == 1:
                 colunas_limpas.append('codigo_fornecedor')
             else:
@@ -87,7 +86,7 @@ def carregar_planilha_segura(arquivo):
         else:
             df['cnpj_forn'] = ""
             
-    # Limpar coluna de acumulador para evitar divergências de ponto flutuante
+    # Limpar coluna de acumulador para evitar divergências
     if 'acumulador' in df.columns:
         def limpa_acum(v):
             s = str(v).strip().upper()
@@ -112,7 +111,6 @@ def carregar_planilha_segura(arquivo):
         df = df[~df['nome_fornecedor'].astype(str).str.upper().isin(['NAN', 'NONE', 'TOTAL ACUMULADOR', ''])]
         df = df.dropna(subset=['nome_fornecedor'])
 
-    # Garante a existência da coluna mesmo que uma das planilhas venha sem ela
     if 'codigo_fornecedor' not in df.columns:
         df['codigo_fornecedor'] = "-"
 
@@ -214,7 +212,6 @@ if "1." in ferramenta:
         if 'cnpj_forn' in df.columns: df['cnpj_forn'] = df['cnpj_forn'].astype(str)
         if 'codigo_fornecedor' in df.columns: df['codigo_fornecedor'] = df['codigo_fornecedor'].astype(str)
             
-        # Organização de Colunas incluindo o Cód. Fornecedor
         ordem_cols = ['codigo_fornecedor', 'doc', 'cnpj_forn', 'valor_total', 'data', 'serie', 'acumulador', 'file_name']
         ordem_cols = [c for c in ordem_cols if c in df.columns]
         
@@ -264,9 +261,15 @@ elif "2." in ferramenta:
                 
                 st.info("💡 Clique na coluna 'Status' para ordenar. Avalie e edite os divergentes diretamente na coluna '✏️ AC (Mês Atual)'.")
                 
-                # Exibição explícita do Cód. Forn no Grid do Streamlit
+                # --- BLINDAGEM ABSOLUTA CONTRA KEYERROR ---
+                # Força a criação das colunas com valor padrão caso não existam no arquivo subido
+                for col in ['Status', 'codigo_fornecedor', 'doc', 'nome_fornecedor', 'cnpj_forn', 'acumulador_anterior', 'acumulador', 'data']:
+                    if col not in df_at.columns:
+                        df_at[col] = "-"
+                if 'valor_total' not in df_at.columns:
+                    df_at['valor_total'] = 0.0
+                
                 cols_view = ['Status', 'codigo_fornecedor', 'doc', 'nome_fornecedor', 'cnpj_forn', 'acumulador_anterior', 'acumulador', 'valor_total', 'data']
-                cols_view = [c for c in cols_view if c in df_at.columns]
                 
                 df_final = st.data_editor(
                     df_at[cols_view],
