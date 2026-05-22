@@ -101,7 +101,6 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fisc
         return dicionario_fornecedores[nome_pesquisa_norm]
         
     for nome_bd_norm, codigo in dicionario_fornecedores.items():
-        # Exige que a palavra comece igual para evitar que Ribeiro no final case com Gabriel Ribeiro no começo
         if nome_pesquisa_norm.startswith(nome_bd_norm) or nome_bd_norm.startswith(nome_pesquisa_norm):
             return codigo
 
@@ -358,7 +357,6 @@ if f_fiscal and f_fornec and f_extratos:
             if ent['matched'] or (ent['valor_bruto'] != 0.0 and is_credito): continue 
             
             nome_f_norm = normalizar_para_match(ent['name_f'])
-            # Blinda a verificação do nome no arquivo fiscal para garantir correspondência forte
             nome_bate = (nome_f_norm in fav_banco_norm) or (fav_banco_norm in nome_f_norm)
             
             v_liquido = round(ent['valor_bruto'] - ent['irrf'] - ent['crf'], 2)
@@ -408,9 +406,14 @@ if f_fiscal and f_fornec and f_extratos:
         if "MORIM SERVICOS" in str(trans['Fav']).upper() and cod_forn_final == "1983":
             cod_forn_final = ""
 
+        # AQUI ESTÁ A CORREÇÃO DE LÓGICA DA SUA ANALISTA
         if is_credito:
+            # Entrada de dinheiro: Banco (1857) vai pro DÉBITO
             matriz_saida.append({
-                'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
+                'Data': trans['Data'], 
+                'Deb': red_banco,    # <-- Banco debitado
+                'Cred': '',          # <-- Crédito na receita/origem
+                'Saídas': v_banco,
                 'Histórico': normalizar_espacos(f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}")
             })
         else:
@@ -422,8 +425,12 @@ if f_fiscal and f_fornec and f_extratos:
             else:
                 txt_hist = f"PAGTO {trans['Fav']}"
                 
+            # Saída de dinheiro: Fornecedor no DÉBITO, Banco (1857) vai pro CRÉDITO
             matriz_saida.append({
-                'Data': trans['Data'], 'Deb': cod_forn_final, 'Cred': red_banco, 'Saídas': v_banco,
+                'Data': trans['Data'], 
+                'Deb': cod_forn_final, 
+                'Cred': red_banco,   # <-- Banco creditado
+                'Saídas': v_banco,
                 'Histórico': normalizar_espacos(txt_hist)
             })
 
