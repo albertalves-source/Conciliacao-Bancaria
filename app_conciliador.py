@@ -32,10 +32,12 @@ def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
     s = str(data_obj).strip()
     
+    # Trava de segurança para formato ISO AAAA-MM-DD
     if re.match(r'^\d{4}-\d{2}-\d{2}$', s):
         try: return datetime.strptime(s, '%Y-%m-%d').date()
         except: pass
         
+    # Trata formato clássico brasileiro DD/MM/AAAA
     if re.match(r'^\d{2}/\d{2}/\d{4}$', s):
         try: return datetime.strptime(s, '%d/%m/%Y').date()
         except: pass
@@ -62,6 +64,7 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
+# Busca avançada por aproximação de caracteres
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
@@ -77,6 +80,7 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fisc
         return codigo_fiscal_fallback
     return ""
 
+# Varredura inteligente para ignorar metadados do topo do relatório Domínio
 def carregar_fiscal_seguro(arquivo):
     arquivo.seek(0)
     if arquivo.name.lower().endswith('.csv'):
@@ -171,7 +175,7 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- MOTOR DE EXPORTAÇÃO TXT (Leiaute Domínio Clássico) ---
+# --- RECONSTRUÇÃO DA FUNÇÃO DO TXT ADAPTADA PARA AS 5 COLUNAS ---
 def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
     linhas = []
     datas_parsed = pd.to_datetime(df_final['Data'], format='%d/%m/%Y', errors='coerce').dropna()
@@ -181,13 +185,12 @@ def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
     empresa_pad = str(cod_empresa).zfill(7)
     cnpj_pad = re.sub(r'\D', '', str(cnpj_empresa)).zfill(14)
     
-    # Registro Tipo 01 (Abertura do arquivo)
     linha01 = f"01{empresa_pad}{cnpj_pad}{dt_ini}{dt_fim}N0500000117"
     linhas.append(linha01)
     
     seq = 1
     for idx, row in df_final.iterrows():
-        val = float(row['Saídas'])
+        val = limpar_valor(row['Saídas'])
         if val <= 0: continue
         
         cod_deb = str(row['Deb']).strip()
@@ -195,19 +198,16 @@ def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
         if not cod_deb or cod_deb in ['-', 'nan', 'None']: cod_deb = "9999"
         if not cod_cred or cod_cred in ['-', 'nan', 'None']: cod_cred = "9999"
         
-        # Registro Tipo 02 (Data do Lançamento)
         linha02 = f"02{str(seq).zfill(7)}X{row['Data']}".ljust(150)
         linhas.append(linha02)
         seq += 1
         
-        # Registro Tipo 03 (Partidas e Histórico)
         v_str = str(int(round(val * 100))).zfill(14) 
         hist_pad = str(row['Histórico']).upper()[:250].ljust(250)
         linha03 = f"03{str(seq).zfill(7)}{cod_deb.zfill(7)}{cod_cred.zfill(7)}{v_str}        {hist_pad}0000000"
         linhas.append(linha03)
         seq += 1
         
-    # Fim do arquivo
     linhas.append("9" * 100)
     return "\r\n".join(linhas) + "\r\n"
 
@@ -272,8 +272,9 @@ if f_fiscal and f_fornec and f_extratos:
     for f in f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
-    # --- MATRIZ DE CONFRONTO UNIFICADA ---
+    # --- MOTOR DE VARREDURA CRONOLÓGICA DO EXTRATO BANCÁRIO ---
     matriz_saida = []
+    ids_extrato_usados = set()
     red_banco = "1857" 
 
     for trans in extrato_lista:
@@ -287,7 +288,8 @@ if f_fiscal and f_fornec and f_extratos:
             if ent['valor_bruto'] != 0.0 and is_credito: continue 
             
             nome_f_norm = normalizar_para_match(ent['name_f'])
-            nome_bate = (nome_f_norm[:8] in fav_banco_norm) or (fav_banco_norm[:8] in nome_banco_norm)
+            # --- CORREÇÃO DO TYPO DA VARIÁVEL AQUI ---
+            nome_bate = (nome_f_norm[:8] in fav_banco_norm) or (fav_banco_norm[:8] in nome_f_norm)
             
             try:
                 dt_banco_obj = datetime.strptime(trans['Data'], '%d/%m/%Y').date()
@@ -317,7 +319,7 @@ if f_fiscal and f_fornec and f_extratos:
             elif match_fiscal:
                 txt_hist = f"PAGTO {match_fiscal['name_f']}"
             else:
-                txt_hist = f"PAGT {trans['Fav']}"
+                txt_hist = f"PAGTO {trans['Fav']}"
                 
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': cod_forn_final, 'Cred': red_banco, 'Saídas': v_banco,
@@ -354,9 +356,9 @@ if f_fiscal and f_fornec and f_extratos:
     c_btn1, c_btn2 = st.columns(2)
     with c_btn1:
         st.download_button(
-            label="📥 Baixar Planilha de Conciliação (.XLSX)",
+            label="📥 Baixar Planilha de Conciliação Corrigida Completa (.XLSX)",
             data=output_excel.getvalue(),
-            file_name=f"Conciliacao_Unificada_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            file_name=f"Conciliacao_Unificada_BetSorte_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
