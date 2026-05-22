@@ -140,7 +140,6 @@ def extrair_dados_extrato(file, termos_ignorar):
                             if len(row) < 2: continue
                             sub_datas = [d.strip() for d in row[0].split('\n') if d.strip()]
                             sub_descs = [d.strip() for d in row[1].split('\n') if d.strip()]
-                            
                             idx_valor = -2 if len(row) >= 4 else -1
                             sub_valores_raw = [v.strip() for v in row[idx_valor].split('\n') if v.strip()]
                             
@@ -151,7 +150,6 @@ def extrair_dados_extrato(file, termos_ignorar):
                                     
                             min_len = min(len(sub_datas), len(sub_descs))
                             
-                            # Separação cirúrgica de valores reais vs saldos acumulados do Z.ro Bank
                             valores_movimento = []
                             if any("SALDO INICIAL" in d.upper() for d in sub_descs):
                                 if len(valores_dinheiro) >= 4:
@@ -331,18 +329,19 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
+        # --- PADRONIZAÇÃO EXATA DOS PREFIXOS E HISTÓRICOS REQUERIDOS ---
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
-                'Histórico': f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}".strip()
+                'Histórico': f"RECEB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}".strip()
             })
         else:
             if match_fiscal and match_fiscal['nota'] != '-':
-                txt_hist = f"PAGT NF {match_fiscal['nota']} {match_fiscal['name_f']}"
+                txt_hist = f"PAGTO NF {match_fiscal['nota']} {match_fiscal['name_f']}"
             elif match_fiscal:
-                txt_hist = f"PAGT {match_fiscal['name_f']}"
+                txt_hist = f"PAGTO {match_fiscal['name_f']}"
             else:
-                txt_hist = f"PAGT {trans['Fav']}"
+                txt_hist = f"PAGTO {trans['Fav']}"
                 
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': cod_forn_final, 'Cred': red_banco, 'Saídas': v_banco,
