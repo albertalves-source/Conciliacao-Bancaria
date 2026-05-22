@@ -214,8 +214,8 @@ def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
 # --- INTERFACE ---
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
-    cod_empresa_txt = st.text_input("Código da Empresa no Domínio:", value="1002")
-    cnpj_empresa_txt = st.text_input("CNPJ da Empresa:", value="40.633.348/0001-30")
+    cod_empresa_txt = st.text_input("Código da Empresa no Domínio:", value="")
+    cnpj_empresa_txt = st.text_input("CNPJ da Empresa:", value="")
     st.divider()
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
     tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Dias:", 0, 30, 7)
@@ -224,7 +224,7 @@ with st.sidebar:
 
 col1, col2, col3 = st.columns(3)
 with col1: f_fiscal = st.file_uploader("📂 1. Planilha de Entradas (Relatório Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo com o Código dos Forncedores (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
@@ -358,7 +358,7 @@ if f_fiscal and f_fornec and f_extratos:
         st.download_button(
             label="📥 Baixar Planilha de Conciliação Corrigida Completa (.XLSX)",
             data=output_excel.getvalue(),
-            file_name=f"Conciliacao_Unificada_BetSorte_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            file_name=f"Conciliacao_Unificada_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
