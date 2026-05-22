@@ -92,23 +92,22 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-# CORREÇÃO CRÍTICA: Busca primeiro no cadastro oficial de fornecedores antes de aceitar o código do relatório fiscal
+# FIX AUDITORIA: Prioridade máxima para a tabela oficial de Fornecedores (FORNEC BET DA SORTE)
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
     
-    # 1. Tenta match exato no Cadastro de Fornecedores
+    # 1. Busca exata no plano de contas (Cadastro de Fornecedores)
     if nome_pesquisa_norm in dicionario_fornecedores: 
         return dicionario_fornecedores[nome_pesquisa_norm]
         
-    # 2. Tenta match parcial no Cadastro de Fornecedores
+    # 2. Busca por aproximação no plano de contas (Cadastro de Fornecedores)
     for nome_bd_norm, codigo in dicionario_fornecedores.items():
         if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm) or (len(nome_pesquisa_norm) > 5 and nome_pesquisa_norm[:6] in nome_bd_norm):
             return codigo
             
-    # 3. Se não achou de jeito nenhum no Cadastro, aí sim usa o código do arquivo fiscal
+    # 3. Fallback seguro: só adota o código do arquivo fiscal se for um código válido e longo
     if codigo_fiscal_fallback and codigo_fiscal_fallback != '-' and str(codigo_fiscal_fallback).strip() != "":
-        # Evita herdar códigos curtos de controle interno do relatório fiscal (ex: acumuladores/cfop)
         if len(str(codigo_fiscal_fallback)) >= 3:
             return codigo_fiscal_fallback
             
@@ -393,7 +392,7 @@ if f_fiscal and f_fornec and f_extratos:
                     ent['matched'] = True
                     break
 
-        # CORREÇÃO: Aplica a nova regra hierárquica estável de busca de códigos
+        # CORREÇÃO HIERÁRQUICA: Mapeamento de códigos estrito contra Procv Cego
         if match_fiscal:
             cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd, match_fiscal['cod_f'])
         else:
@@ -404,7 +403,7 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # Trava para evitar falsos positivos conhecidos de conflito de strings (Morim x Amorim)
+        # Trava para evitar sobreposição semântica indevida de fornecedores ("Morim" vs "Leonardo Amorim")
         if "MORIM SERVICOS" in str(trans['Fav']).upper() and cod_forn_final == "1983":
             cod_forn_final = ""
 
