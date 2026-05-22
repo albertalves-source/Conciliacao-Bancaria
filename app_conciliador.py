@@ -295,6 +295,7 @@ if f_fiscal and f_fornec and f_extratos:
 
     # --- MOTOR DE VARREDURA CRONOLÓGICA DO EXTRATO BANCÁRIO ---
     matriz_saida = []
+    ids_extrato_usados = set()
     red_banco = "1857" 
 
     for trans in extrato_lista:
@@ -329,19 +330,19 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # --- PADRONIZAÇÃO EXATA DOS PREFIXOS E HISTÓRICOS REQUERIDOS ---
+        # --- RECONSTRUÇÃO RIGOROSA DOS PREFIXOS DO SEU MODELO (RECB / PAGT / PAGT NF) ---
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
-                'Histórico': f"RECEB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}".strip()
+                'Histórico': f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}".strip()
             })
         else:
             if match_fiscal and match_fiscal['nota'] != '-':
-                txt_hist = f"PAGTO NF {match_fiscal['nota']} {match_fiscal['name_f']}"
+                txt_hist = f"PAGT NF {match_fiscal['nota']} {match_fiscal['name_f']}"
             elif match_fiscal:
-                txt_hist = f"PAGTO {match_fiscal['name_f']}"
+                txt_hist = f"PAGT {match_fiscal['name_f']}"
             else:
-                txt_hist = f"PAGTO {trans['Fav']}"
+                txt_hist = f"PAGT {trans['Fav']}"
                 
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': cod_forn_final, 'Cred': red_banco, 'Saídas': v_banco,
