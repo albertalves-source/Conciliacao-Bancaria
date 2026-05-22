@@ -30,10 +30,9 @@ def limpar_valor(v):
 
 def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
-    # Remove qualquer vestígio de horário da data lida do Excel para não corromper o Regex
+    # CORREÇÃO CRÍTICA 1: Remove a hora oculta que inverte a leitura do Pandas
     s = str(data_obj).strip().split(' ')[0]
     
-    # Trava blindada para formato ISO AAAA-MM-DD (Garante que Abril não vire Junho)
     if re.match(r'^\d{4}-\d{2}-\d{2}$', s):
         try: return datetime.strptime(s, '%Y-%m-%d').date()
         except: pass
@@ -119,7 +118,7 @@ def carregar_fiscal_seguro(arquivo):
     df.columns = colunas_limpas
     return df
 
-# Leitor blindado (mantém tabelas intactas)
+# Extração de PDF com suporte à números com espaços vazios
 def extrair_dados_extrato(file, termos_ignorar):
     transacoes = []
     if file.name.lower().endswith(".pdf"):
@@ -141,7 +140,8 @@ def extrair_dados_extrato(file, termos_ignorar):
                             
                             valores_dinheiro = []
                             for v in sub_valores_raw:
-                                if re.search(r'\d+,\d{2}', v):
+                                # CORREÇÃO CRÍTICA 2: Captura os valores totais independente de tabulações vazias
+                                if re.search(r'[\d\s]+,\d{2}', v):
                                     valores_dinheiro.append(limpar_valor(v))
                                     
                             min_len = min(len(sub_datas), len(sub_descs))
@@ -158,20 +158,21 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 if not data_match: continue
                                 
                                 desc_txt = sub_descs[k].upper()
-                                if any(x in desc_txt for x in ["SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO", "DATA", "DESCRIÇÃO"]): continue
+                                if any(x in desc_txt for x in ["SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
                                 if any(t in desc_txt for t in termos_ignorar if t): continue
                                 
                                 is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA", "PIX DEVOLVIDO"])
                                 val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
                                 
                                 if val_final > 0 or "SALDO INICIAL" in desc_txt:
-                                    # Limpeza Profunda que protege a sigla 'RS' no meio de empresas (ex: ADMASTERS)
-                                    desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt)
-                                    desc_txt = re.sub(r'\b[A-Z0-9]{25,35}\b', '', desc_txt, flags=re.IGNORECASE)
-                                    for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "TRANSFERENCIA INTERNA", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO"]:
+                                    # Limpeza Profunda do histórico sem amputar nomes reais
+                                    desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt) # CPFs e CNPJs
+                                    desc_txt = re.sub(r'\b[A-Z0-9]{25,35}\b', '', desc_txt, flags=re.IGNORECASE) # Chaves Longas
+                                    
+                                    for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO"]:
                                         desc_txt = desc_txt.replace(t, '')
                                         
-                                    desc_txt = re.sub(r'\bR\$\b|\bRS\b', '', desc_txt) # Remove RS (moeda) isolada
+                                    desc_txt = re.sub(r'R\$\s*\d*|\bRS\b\s*\d*', '', desc_txt) # Remove moeda/RS isolada
                                     desc_txt = normalizar_espacos(desc_txt).strip('," -.')
                                     
                                     if "SALDO INICIAL" in sub_descs[k].upper():
@@ -188,7 +189,7 @@ def extrair_dados_extrato(file, termos_ignorar):
                             linha_upper = linha.upper()
                             if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
                             data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
-                            valor_match = re.findall(r'-?[\d.]*,\d{2}', linha)
+                            valor_match = re.findall(r'-?[\d\s.]*,\d{2}', linha)
                             if data_match and valor_match:
                                 is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT"])
                                 val = abs(limpar_valor(valor_match[0]))
@@ -199,7 +200,6 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# Exportação do ficheiro texto no padrão oficial do sistema Domínio
 def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
     linhas = []
     datas_parsed = pd.to_datetime(df_final['Data'], format='%d/%m/%Y', errors='coerce').dropna()
@@ -248,7 +248,7 @@ with st.sidebar:
 
 col1, col2, col3 = st.columns(3)
 with col1: f_fiscal = st.file_uploader("📂 1. Relatório de Entradas (Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo de Fornecedores (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
@@ -297,7 +297,6 @@ if f_fiscal and f_fornec and f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
     matriz_saida = []
-    ids_extrato_usados = set()
     red_banco = "1857" 
 
     for trans in extrato_lista:
@@ -332,7 +331,7 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # PADRÃO RIGOROSO DE PREFIXOS
+        # CONSTRUÇÃO DO HISTÓRICO COM PADRÃO CÉLULA A CÉLULA
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
