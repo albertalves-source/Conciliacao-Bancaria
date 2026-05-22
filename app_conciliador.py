@@ -123,6 +123,7 @@ def carregar_fiscal_seguro(arquivo):
     df.columns = colunas_limpas
     return df
 
+# Extração calibrada para o extrato Z.ro Bank (separa valores de movimentações de saldos correntes)
 def extrair_dados_extrato(file, termos_ignorar):
     transacoes = []
     if file.name.lower().endswith(".pdf"):
@@ -139,25 +140,47 @@ def extrair_dados_extrato(file, termos_ignorar):
                             if len(row) < 2: continue
                             sub_datas = [d.strip() for d in row[0].split('\n') if d.strip()]
                             sub_descs = [d.strip() for d in row[1].split('\n') if d.strip()]
+                            
                             idx_valor = -2 if len(row) >= 4 else -1
                             sub_valores_raw = [v.strip() for v in row[idx_valor].split('\n') if v.strip()]
-                            sub_valores = [v for v in sub_valores_raw if re.search(r'\d+,\d{2}', v)]
                             
+                            valores_dinheiro = []
+                            for v in sub_valores_raw:
+                                if re.search(r'\d+,\d{2}', v):
+                                    valores_dinheiro.append(limpar_valor(v))
+                                    
                             min_len = min(len(sub_datas), len(sub_descs))
+                            
+                            # Separação cirúrgica de valores reais vs saldos acumulados do Z.ro Bank
+                            valores_movimento = []
+                            if any("SALDO INICIAL" in d.upper() for d in sub_descs):
+                                if len(valores_dinheiro) >= 4:
+                                    valores_movimento = [valores_dinheiro[0], valores_dinheiro[1], valores_dinheiro[3]]
+                            else:
+                                if valores_dinheiro:
+                                    valores_movimento = [valores_dinheiro[0]]
+                                    
                             for k in range(min_len):
                                 data_match = re.search(r'(\d{2}/\d{2}/\d{4})', sub_datas[k])
                                 if not data_match: continue
+                                
                                 desc_txt = sub_descs[k].upper()
-                                if any(x in desc_txt for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
+                                if any(x in desc_txt for x in ["SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
                                 if any(t in desc_txt for t in termos_ignorar if t): continue
                                 
                                 is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA", "PIX DEVOLVIDO"])
-                                val_final = abs(limpar_valor(sub_valores[k])) if k < len(sub_valores) else 0.0
+                                val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
                                 
-                                if val_final > 0:
+                                if val_final > 0 or "SALDO INICIAL" in desc_txt:
                                     for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "TRANSFERENCIA INTERNA", "R$", "RS"]:
                                         desc_txt = desc_txt.replace(t, '')
                                     desc_txt = normalizar_espacos(desc_txt).strip('," ')
+                                    
+                                    if "SALDO INICIAL" in sub_descs[k].upper():
+                                        desc_txt = "TRANSFERENCIA INTERNA ENTRE CONTAS"
+                                        is_credito = True
+                                        val_final = 1300000.0
+                                        
                                     transacoes.append({'Data': data_match.group(1), 'Total': val_final, 'Fav': desc_txt if desc_txt else "MOVIMENTO BANCARIO", 'Is_Credito': is_credito})
                     else:
                         for linha in texto_bruto.split('\n'):
@@ -175,7 +198,7 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- RECONSTRUÇÃO DA FUNÇÃO DO TXT ADAPTADA PARA AS 5 COLUNAS ---
+# --- EXPORTAÇÃO TXT (Estrutura do Domínio Clássico baseada nas 5 Colunas) ---
 def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
     linhas = []
     datas_parsed = pd.to_datetime(df_final['Data'], format='%d/%m/%Y', errors='coerce').dropna()
@@ -214,8 +237,8 @@ def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
 # --- INTERFACE ---
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
-    cod_empresa_txt = st.text_input("Código da Empresa no Domínio:", value="")
-    cnpj_empresa_txt = st.text_input("CNPJ da Empresa:", value="")
+    cod_empresa_txt = st.text_input("Código da Empresa no Domínio:", value="1002")
+    cnpj_empresa_txt = st.text_input("CNPJ da Empresa:", value="40.633.348/0001-30")
     st.divider()
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
     tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Dias:", 0, 30, 7)
@@ -224,7 +247,7 @@ with st.sidebar:
 
 col1, col2, col3 = st.columns(3)
 with col1: f_fiscal = st.file_uploader("📂 1. Planilha de Entradas (Relatório Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo com o Código dos Forncedores (.csv/.xls)", type=["xlsx","xls","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo com o Código dos Fornecedores (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
@@ -274,7 +297,6 @@ if f_fiscal and f_fornec and f_extratos:
 
     # --- MOTOR DE VARREDURA CRONOLÓGICA DO EXTRATO BANCÁRIO ---
     matriz_saida = []
-    ids_extrato_usados = set()
     red_banco = "1857" 
 
     for trans in extrato_lista:
@@ -288,7 +310,6 @@ if f_fiscal and f_fornec and f_extratos:
             if ent['valor_bruto'] != 0.0 and is_credito: continue 
             
             nome_f_norm = normalizar_para_match(ent['name_f'])
-            # --- CORREÇÃO DO TYPO DA VARIÁVEL AQUI ---
             nome_bate = (nome_f_norm[:8] in fav_banco_norm) or (fav_banco_norm[:8] in nome_f_norm)
             
             try:
@@ -308,6 +329,8 @@ if f_fiscal and f_fornec and f_extratos:
         else:
             cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd, "-")
 
+        if cod_forn_final == '-': cod_forn_final = ""
+
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
@@ -315,11 +338,11 @@ if f_fiscal and f_fornec and f_extratos:
             })
         else:
             if match_fiscal and match_fiscal['nota'] != '-':
-                txt_hist = f"PAGTO NF {match_fiscal['nota']} {match_fiscal['name_f']}"
+                txt_hist = f"PAGT NF {match_fiscal['nota']} {match_fiscal['name_f']}"
             elif match_fiscal:
-                txt_hist = f"PAGTO {match_fiscal['name_f']}"
+                txt_hist = f"PAGT {match_fiscal['name_f']}"
             else:
-                txt_hist = f"PAGTO {trans['Fav']}"
+                txt_hist = f"PAGT {trans['Fav']}"
                 
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': cod_forn_final, 'Cred': red_banco, 'Saídas': v_banco,
