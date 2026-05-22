@@ -8,7 +8,7 @@ import unicodedata
 from datetime import datetime
 
 # Configurações de Página do Streamlit
-st.set_page_config(page_title="Portal de Conciliação - Padrão de Postagem 5 Colunas", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Portal de Conciliação - Padrão 5 Colunas", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
 # --- FUNÇÕES DE APOIO CONTÁBIL ---
@@ -30,7 +30,7 @@ def limpar_valor(v):
 
 def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
-    # Remove qualquer traço de horário da data lida do Excel para não corromper o Regex
+    # Remove qualquer vestígio de horário da data lida do Excel para não corromper o Regex
     s = str(data_obj).strip().split(' ')[0]
     
     # Trava blindada para formato ISO AAAA-MM-DD (Garante que Abril não vire Junho)
@@ -119,7 +119,7 @@ def carregar_fiscal_seguro(arquivo):
     df.columns = colunas_limpas
     return df
 
-# Leitor blindado que não perde casas decimais de tabelas
+# Leitor blindado (mantém tabelas intactas)
 def extrair_dados_extrato(file, termos_ignorar):
     transacoes = []
     if file.name.lower().endswith(".pdf"):
@@ -165,13 +165,13 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
                                 
                                 if val_final > 0 or "SALDO INICIAL" in desc_txt:
-                                    # Limpeza Profunda que protege a sigla 'RS' de empresas (ex: ADMASTERS)
+                                    # Limpeza Profunda que protege a sigla 'RS' no meio de empresas (ex: ADMASTERS)
                                     desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt)
                                     desc_txt = re.sub(r'\b[A-Z0-9]{25,35}\b', '', desc_txt, flags=re.IGNORECASE)
                                     for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "TRANSFERENCIA INTERNA", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO"]:
                                         desc_txt = desc_txt.replace(t, '')
                                         
-                                    desc_txt = re.sub(r'\bR\$\b|\bRS\b', '', desc_txt) # Remove moeda de forma isolada
+                                    desc_txt = re.sub(r'\bR\$\b|\bRS\b', '', desc_txt) # Remove RS (moeda) isolada
                                     desc_txt = normalizar_espacos(desc_txt).strip('," -.')
                                     
                                     if "SALDO INICIAL" in sub_descs[k].upper():
@@ -199,6 +199,7 @@ def extrair_dados_extrato(file, termos_ignorar):
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
+# Exportação do ficheiro texto no padrão oficial do sistema Domínio
 def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
     linhas = []
     datas_parsed = pd.to_datetime(df_final['Data'], format='%d/%m/%Y', errors='coerce').dropna()
@@ -218,8 +219,8 @@ def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
         
         cod_deb = str(row['Deb']).strip()
         cod_cred = str(row['Cred']).strip()
-        if not cod_deb or cod_deb in ['-', 'nan', 'None']: cod_deb = "9999"
-        if not cod_cred or cod_cred in ['-', 'nan', 'None']: cod_cred = "9999"
+        if not cod_deb or cod_deb in ['-', 'nan', 'None', '']: cod_deb = "9999"
+        if not cod_cred or cod_cred in ['-', 'nan', 'None', '']: cod_cred = "9999"
         
         linha02 = f"02{str(seq).zfill(7)}X{row['Data']}".ljust(150)
         linhas.append(linha02)
@@ -246,8 +247,8 @@ with st.sidebar:
     termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
 
 col1, col2, col3 = st.columns(3)
-with col1: f_fiscal = st.file_uploader("📂 1. Planilha de Entradas (Relatório Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo de Fornecedores (.csv/.xls)", type=["xlsx","xls","csv"])
+with col1: f_fiscal = st.file_uploader("📂 1. Relatório de Entradas (Fiscal)", type=["xlsx","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
@@ -296,6 +297,7 @@ if f_fiscal and f_fornec and f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
     matriz_saida = []
+    ids_extrato_usados = set()
     red_banco = "1857" 
 
     for trans in extrato_lista:
@@ -330,11 +332,11 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # --- CONSTRUÇÃO DO HISTÓRICO COM OS PREFIXOS EXATOS ---
+        # PADRÃO RIGOROSO DE PREFIXOS
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
-                'Histórico': f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}".strip()
+                'Histórico': normalizar_espacos(f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}")
             })
         else:
             if match_fiscal and match_fiscal['nota'] != '-':
@@ -352,6 +354,7 @@ if f_fiscal and f_fornec and f_extratos:
     for ent in entries_list:
         if not ent['matched']:
             cod_forn_final = buscar_codigo_fornecedor(ent['name_f'], fornec_map_bd, ent['cod_f'])
+            if cod_forn_final == '-': cod_forn_final = ""
             txt_hist = f"NF {ent['nota']} {ent['name_f']}" if ent['nota'] != '-' else f"NF {ent['name_f']}"
             matriz_saida.append({
                 'Data': ent['data_f'], 'Deb': cod_forn_final, 'Cred': '', 'Saídas': ent['valor_bruto'],
@@ -366,12 +369,12 @@ if f_fiscal and f_fornec and f_extratos:
     df_display['Saídas'] = df_display['Saídas'].apply(formatar_moeda_br)
     st.dataframe(df_display, use_container_width=True)
     
-    # 1. Geração física da planilha Excel (.XLSX)
+    # 1. Geração da planilha Excel (.XLSX)
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False, sheet_name='Conciliação')
         
-    # 2. Geração física do Arquivo de texto Domínio (.TXT)
+    # 2. Geração do Arquivo de texto Domínio (.TXT)
     txt_content = gerar_txt_dominio_5_colunas(df_final, cod_empresa_txt, cnpj_empresa_txt)
     txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
     
