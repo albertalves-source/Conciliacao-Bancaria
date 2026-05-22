@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import re
 import io
-import csv
 import warnings
 import unicodedata
 from datetime import datetime
@@ -32,12 +31,10 @@ def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
     s = str(data_obj).strip()
     
-    # Trava de segurança para formato ISO AAAA-MM-DD (Evita inversão de dia/mês)
     if re.match(r'^\d{4}-\d{2}-\d{2}$', s):
         try: return datetime.strptime(s, '%Y-%m-%d').date()
         except: pass
         
-    # Trata formato clássico brasileiro DD/MM/AAAA
     if re.match(r'^\d{2}/\d{2}/\d{4}$', s):
         try: return datetime.strptime(s, '%d/%m/%Y').date()
         except: pass
@@ -64,7 +61,6 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# Busca avançada por aproximação de caracteres
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
@@ -80,7 +76,6 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fisc
         return codigo_fiscal_fallback
     return ""
 
-# Varredura inteligente para ignorar metadados do topo do relatório Domínio
 def carregar_fiscal_seguro(arquivo):
     arquivo.seek(0)
     if arquivo.name.lower().endswith('.csv'):
@@ -123,7 +118,7 @@ def carregar_fiscal_seguro(arquivo):
     df.columns = colunas_limpas
     return df
 
-# Extração calibrada para o extrato Z.ro Bank (Captura valores cheios sem truncar algarismos)
+# --- NOVO MOTOR UNIVERSAL DE LEITURA DO Z.RO BANK ---
 def extrair_dados_extrato(file, termos_ignorar):
     transacoes = []
     if file.name.lower().endswith(".pdf"):
@@ -133,67 +128,44 @@ def extrair_dados_extrato(file, termos_ignorar):
                 for page in pdf.pages:
                     texto_bruto = page.extract_text() or ""
                     
-                    # Identifica blocos estruturados por aspas e vírgulas da tabela interna do PDF
-                    if '","' in texto_bruto or '\n\n' in texto_bruto:
-                        f_io = io.StringIO(texto_bruto)
-                        reader = csv.reader(f_io, delimiter=',', quotechar='"')
-                        for row in reader:
-                            if len(row) < 2: continue
-                            sub_datas = [d.strip() for d in row[0].split('\n') if d.strip()]
-                            sub_descs = [d.strip() for d in row[1].split('\n') if d.strip()]
+                    # 1. Corrige a falha do pdfplumber que insere espaços no meio de números milionários (ex: 1 300.000,00)
+                    texto_bruto = re.sub(r'(?<=\d)\s+(?=\d)', '', texto_bruto)
+                    
+                    for linha in texto_bruto.split('\n'):
+                        linha_upper = linha.upper()
+                        if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
+                        
+                        data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
+                        valor_match = re.findall(r'-?[\d.]*,\d{2}', linha)
+                        
+                        if data_match and valor_match:
+                            is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT", "PIX DEVOLVIDO"])
+                            valores_limpos = [abs(limpar_valor(v)) for v in valor_match]
+                            val = valores_limpos[0] if valores_limpos else 0.0
                             
-                            idx_valor = -2 if len(row) >= 4 else -1
-                            # Captura de valores via Regex Direta sem risco de fatiamento incorreto de string
-                            valores_dinheiro = [limpar_valor(v) for v in re.findall(r'[\d.]*,\d{2}', row[idx_valor]) if limpar_valor(v) > 0]
+                            desc_bruta = linha.replace(data_match.group(1), "")
                             
-                            # Tratamento customizado para o bloco complexo do Saldo Inicial / Abertura do Z.ro Bank
-                            if any("SALDO INICIAL" in d.upper() for d in sub_descs):
-                                transacoes.append({'Data': '01/04/2026', 'Total': 1300000.0, 'Fav': 'TRANSFERENCIA INTERNA ENTRE CONTAS', 'Is_Credito': True})
-                                transacoes.append({'Data': '01/04/2026', 'Total': 5745.40, 'Fav': 'TRANSFERENCIA INTERNA ENTRE CONTAS', 'Is_Credito': True})
-                                transacoes.append({'Data': '01/04/2026', 'Total': 520000.0, 'Fav': 'DIOMAR TADEU DANTAS DE FARIAS', 'Is_Credito': False})
-                                continue
-                                    
-                            min_len = min(len(sub_datas), len(sub_descs))
-                            for k in range(min_len):
-                                data_match = re.search(r'(\d{2}/\d{2}/\d{4})', sub_datas[k])
-                                if not data_match: continue
+                            # 2. Varredura Cirúrgica: Remove chaves Pix End-to-End, Bancos e CPFs/CNPJs isolados do Histórico
+                            corte_doc = re.search(r'\b\d{11}\b|\b\d{14}\b', desc_bruta)
+                            if corte_doc: desc_bruta = desc_bruta[:corte_doc.start()]
+                            corte_hash = re.search(r'\b[A-Z0-9]{25,35}\b', desc_bruta, flags=re.IGNORECASE)
+                            if corte_hash: desc_bruta = desc_bruta[:corte_hash.start()]
                                 
-                                desc_txt = sub_descs[k].upper()
-                                if any(x in desc_txt for x in ["SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO", "DATA", "DESCRIÇÃO"]): continue
-                                if any(t in desc_txt for t in termos_ignorar if t): continue
+                            # 3. Limpeza de sufixos bancários irrelevantes
+                            for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "TRANSFERENCIA INTERNA ENTRE CONTAS", "TRANSFERENCIA INTERNA", "TED RECEBIDA", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO", "R$", "RS", "-", "(PIXSENDSELF)", "."]:
+                                desc_bruta = re.sub(re.escape(t), '', desc_bruta, flags=re.IGNORECASE)
+                            
+                            desc_limpa = normalizar_espacos(desc_bruta).strip(' ,"-')
+                            
+                            if not desc_limpa or desc_limpa == "":
+                                desc_limpa = "TRANSFERENCIA INTERNA ENTRE CONTAS" if is_credito else "PAGAMENTO DE BOLETO"
                                 
-                                is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA", "PIX DEVOLVIDO"])
-                                val_final = valores_dinheiro[k] if k < len(valores_dinheiro) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
-                                
-                                # Limpeza completa de lixo textual (Chaves Pix, CNPJs e IDs longos de transação)
-                                desc_txt = re.sub(r'[A-Z0-9]{32}', '', desc_txt) # Remove hashes longas
-                                desc_txt = re.sub(r'\b\d{11,14}\b', '', desc_txt) # Remove CPFs/CNPJs isolados
-                                for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "TRANSFERENCIA INTERNA", "R$", "RS", "PIX DEVOLVIDO RECEBIDO", "-", '",', '"']:
-                                    desc_txt = desc_txt.replace(t, '')
-                                desc_txt = normalizar_espacos(desc_txt).strip('," ')
-                                
-                                if not desc_txt or desc_txt in ["", "-"]:
-                                    desc_txt = "TRANSFERENCIA INTERNA ENTRE CONTAS" if is_credito else "PAGAMENTO DE BOLETO"
-                                    
-                                if val_final > 0:
-                                    transacoes.append({'Data': data_match.group(1), 'Total': val_final, 'Fav': desc_txt, 'Is_Credito': is_credito})
-                    else:
-                        for linha in texto_bruto.split('\n'):
-                            linha_upper = linha.upper()
-                            if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
-                            data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
-                            valor_match = re.findall(r'-?[\d.]*,\d{2}', linha)
-                            if data_match and valor_match:
-                                is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT"])
-                                val = abs(limpar_valor(valor_match[0]))
-                                desc_bruta = linha.replace(data_match.group(1), "")
-                                for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
-                                if val > 0:
-                                    transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': normalizar_espacos(desc_bruta).strip('," '), 'Is_Credito': is_credito})
+                            if val > 0:
+                                transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
-# --- EXPORTAÇÃO TXT (Estrutura do Domínio Clássico baseada nas 5 Colunas) ---
+# --- EXPORTAÇÃO TXT (Domínio Clássico) ---
 def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
     linhas = []
     datas_parsed = pd.to_datetime(df_final['Data'], format='%d/%m/%Y', errors='coerce').dropna()
@@ -241,8 +213,8 @@ with st.sidebar:
     termos_ignorar = [t.strip().upper() for t in ignorar_txt.split(',')]
 
 col1, col2, col3 = st.columns(3)
-with col1: f_fiscal = st.file_uploader("📂 1. Planilha de Entradas (Relatório Fiscal)", type=["xlsx","csv"])
-with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo com o Código dos Fornecedores (.csv/.xls)", type=["xlsx","xls","csv"])
+with col1: f_fiscal = st.file_uploader("📂 1. Relatório de Entradas (Fiscal)", type=["xlsx","csv"])
+with col2: f_fornec = st.file_uploader("🗂️ 2. Arquivo FORNEC BET DA SORTE (.csv/.xls)", type=["xlsx","xls","csv"])
 with col3: f_extratos = st.file_uploader("📄 3. Extrato Bancário em PDF", type=["pdf"], accept_multiple_files=True)
 
 if f_fiscal and f_fornec and f_extratos:
@@ -290,8 +262,9 @@ if f_fiscal and f_fornec and f_extratos:
     for f in f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
-    # --- MOTOR DE VARREDURA CRONOLÓGICA DO EXTRATO BANCÁRIO ---
+    # --- MATRIZ DE CONFRONTO UNIFICADA ---
     matriz_saida = []
+    ids_extrato_usados = set()
     red_banco = "1857" 
 
     for trans in extrato_lista:
@@ -326,7 +299,7 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # --- APLICADO FIELMENTE O PADRÃO DE HISTÓRICO REQUERIDO (RECB / PAGT / PAGT NF) ---
+        # --- APLICADO O PADRÃO HISTÓRICO RIGOROSO (RECB / PAGT / PAGT NF) ---
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
@@ -362,12 +335,10 @@ if f_fiscal and f_fornec and f_extratos:
     df_display['Saídas'] = df_display['Saídas'].apply(formatar_moeda_br)
     st.dataframe(df_display, use_container_width=True)
     
-    # 1. Geração física da planilha Excel (.XLSX)
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False, sheet_name='Conciliação')
         
-    # 2. Geração física do Arquivo de texto Domínio (.TXT)
     txt_content = gerar_txt_dominio_5_colunas(df_final, cod_empresa_txt, cnpj_empresa_txt)
     txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
     
