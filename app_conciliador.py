@@ -219,7 +219,6 @@ def extrair_dados_extrato(file, termos_ignorar):
                                     transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
         
-    # --- FILTRO ANTI-DUPLICIDADE DE LINHAS FANTASMAS ---
     transacoes_dedup = []
     vistos = set()
     for t in transacoes:
@@ -270,6 +269,9 @@ with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
     cod_empresa_txt = st.text_input("Código da Empresa no Domínio:", value="1002")
     cnpj_empresa_txt = st.text_input("CNPJ da Empresa:", value="40.633.348/0001-30")
+    # NOVO CAMPO: Código do Banco dinâmico
+    cod_banco_txt = st.text_input("Código da Conta Bancária:", value="1857")
+    
     st.divider()
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
     tolerancia_dias = 99999 if ignorar_data else st.slider("Tolerância de Dias:", 0, 30, 7)
@@ -330,7 +332,8 @@ if f_fiscal and f_fornec and f_extratos:
         extrato_lista.extend(extrair_dados_extrato(f, termos_ignorar))
 
     matriz_saida = []
-    red_banco = "1857" 
+    # Usando a variável preenchida pelo usuário na barra lateral
+    red_banco = cod_banco_txt.strip() 
 
     for trans in extrato_lista:
         fav_banco_norm = normalizar_para_match(trans['Fav'])
@@ -342,7 +345,6 @@ if f_fiscal and f_fornec and f_extratos:
             
         match_fiscal = None
         
-        # PASSO 1: Match por Nome (flexível) e Valor (Bruto ou Líquido)
         for ent in entries_list:
             if ent['matched'] or (ent['valor_bruto'] != 0.0 and is_credito): continue 
             
@@ -364,7 +366,6 @@ if f_fiscal and f_fornec and f_extratos:
                 ent['matched'] = True
                 break
 
-        # PASSO 2: Match Cego por Valor Exato (Proteção contra Boletos Falsos)
         if not match_fiscal and not is_credito:
             for ent in entries_list:
                 if ent['matched'] or (ent['valor_bruto'] != 0.0 and is_credito): continue
@@ -377,7 +378,6 @@ if f_fiscal and f_fornec and f_extratos:
                             
                 dif_dias = abs((ent['dt_obj'] - dt_banco_obj).days) if ent['dt_obj'] else 999
                 
-                # --- TRAVA PARA BOLETOS: Tolerância de no máximo 2 dias e sem nome ---
                 is_boleto_generico = ("BOLETO" in fav_banco_norm)
                 dias_permitidos = 2 if is_boleto_generico else tolerancia_dias
                 
@@ -386,11 +386,9 @@ if f_fiscal and f_fornec and f_extratos:
                     ent['matched'] = True
                     break
 
-        # ATRIBUIÇÃO DE CÓDIGOS
         if match_fiscal:
             cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd, match_fiscal['cod_f'])
         else:
-            # Só atribui código de fornecedor se o nome não for genericamente um Boleto/Imposto
             if "BOLETO" in fav_banco_norm or "MINISTERIO DA FAZENDA" in fav_banco_norm.upper():
                 cod_forn_final = ""
             else:
