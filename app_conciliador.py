@@ -238,38 +238,40 @@ def extrair_dados_extrato(file, termos_ignorar):
             
     return transacoes_dedup
 
-# --- NOVO GERADOR DE TXT DELIMITADO PARA O DOMÍNIO ---
-def gerar_txt_dominio_delimitado(df_final):
+# --- GERADOR DE TXT BLINDADO E LIMPO ---
+def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
     linhas = []
-    # Cabeçalho padrão do Domínio Sistemas CSV/Delimitado
-    header = "Data;Cód. Conta Debito;Cód. Conta Credito;Valor;Cód. Histórico;Complemento Histórico;Inicia Lote;Código Matriz/Filial;Centro de Custo Débito;Centro de Custo Crédito"
-    linhas.append(header)
+    
+    if incluir_cabecalho:
+        header = "Data;Cód. Conta Debito;Cód. Conta Credito;Valor;Cód. Histórico;Complemento Histórico;Inicia Lote;Código Matriz/Filial;Centro de Custo Débito;Centro de Custo Crédito"
+        linhas.append(header)
     
     for idx, row in df_final.iterrows():
         val_float = limpar_valor(row['Saídas'])
         if val_float <= 0: continue
         
+        # CORREÇÃO FANTASMA .0: Remove o decimal .0 do final que o Pandas injeta ao converter int com NaN
         cod_deb = str(row['Deb']).strip()
-        cod_cred = str(row['Cred']).strip()
+        if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
         
-        # Converte valores vazios/nulos lidos do Excel para "9999" para que o arquivo não quebre
+        cod_cred = str(row['Cred']).strip()
+        if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
+        
         if not cod_deb or cod_deb.lower() in ['-', 'nan', 'none', '']: cod_deb = "9999"
         if not cod_cred or cod_cred.lower() in ['-', 'nan', 'none', '']: cod_cred = "9999"
         
-        # Formata o valor COM VÍRGULA nas decimais e SEM PONTO de milhar (Ex: 13225,00)
         val_str = f"{val_float:.2f}".replace('.', ',')
         
-        hist_texto = str(row['Histórico']).strip()
+        # SANITIZAÇÃO: Remove ponto e vírgula perdido no texto que quebra o layout do Domínio!
+        hist_texto = str(row['Histórico']).strip().replace(';', ',').replace('\r', '').replace('\n', ' ')
         if hist_texto.lower() == 'nan': hist_texto = ""
         
-        # Garante a formatação exata da data (dd/mm/aaaa) mesmo se vier do Excel como Timestamp
         data_val = row['Data']
         if isinstance(data_val, pd.Timestamp) or isinstance(data_val, datetime):
             data_str = data_val.strftime('%d/%m/%Y')
         else:
             data_str = str(data_val).strip()
         
-        # Monta a linha obedecendo estritamente aos delimitadores ";"
         linha = f"{data_str};{cod_deb};{cod_cred};{val_str};;{hist_texto};;;;"
         linhas.append(linha)
         
@@ -279,6 +281,7 @@ def gerar_txt_dominio_delimitado(df_final):
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
     cod_banco_txt = st.text_input("Código da Conta Bancária:", value="1857")
+    incluir_cabecalho = st.checkbox("Incluir Cabeçalho no TXT", value=False, help="Marque apenas se o seu layout do Domínio exigir a leitura da primeira linha como títulos.")
     
     st.divider()
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
@@ -406,7 +409,6 @@ with tab1:
                     cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd, "-")
 
             if cod_forn_final == '-': cod_forn_final = ""
-
             if "MORIM SERVICOS" in str(trans['Fav']).upper() and cod_forn_final == "1983":
                 cod_forn_final = ""
 
@@ -454,7 +456,7 @@ with tab1:
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             df_final.to_excel(writer, index=False, sheet_name='Conciliação')
             
-        txt_content = gerar_txt_dominio_delimitado(df_final)
+        txt_content = gerar_txt_dominio_delimitado(df_final, incluir_cabecalho)
         txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
         
         st.markdown("---")
@@ -488,7 +490,7 @@ with tab2:
             st.success("Planilha carregada com sucesso! Pré-visualização:")
             st.dataframe(df_editado, use_container_width=True)
             
-            txt_content_editado = gerar_txt_dominio_delimitado(df_editado)
+            txt_content_editado = gerar_txt_dominio_delimitado(df_editado, incluir_cabecalho)
             txt_bytes_editado = txt_content_editado.encode('iso-8859-1', errors='replace')
             
             st.download_button(
