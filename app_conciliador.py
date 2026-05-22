@@ -7,11 +7,10 @@ import warnings
 import unicodedata
 from datetime import datetime
 
-# Configurações de Página do Streamlit
 st.set_page_config(page_title="Portal de Conciliação - Padrão 5 Colunas", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
-# --- FUNÇÕES DE APOIO CONTÁBIL ---
+# --- FUNÇÕES DE APOIO ---
 def formatar_moeda_br(v):
     try:
         val = float(v)
@@ -30,7 +29,6 @@ def limpar_valor(v):
 
 def converter_data_dominio(data_obj):
     if pd.isna(data_obj): return None
-    # CORREÇÃO CRÍTICA 1: Remove a hora oculta que inverte a leitura do Pandas
     s = str(data_obj).strip().split(' ')[0]
     
     if re.match(r'^\d{4}-\d{2}-\d{2}$', s):
@@ -58,7 +56,7 @@ def normalizar_para_match(texto):
     txt = str(texto).upper().strip()
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
     txt = re.sub(r'[\s\-,.\/]', '', txt)
-    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "FILHO", "PARTICIPACOES", "SERVICOS", "COMERCIO", "MARKETING"]:
+    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "FILHO", "PARTICIPACOES", "SERVICOS", "COMERCIO", "MARKETING", "DIGITAL", "TECNOLOGIA"]:
         txt = txt.replace(termo, "")
     return txt
 
@@ -118,7 +116,6 @@ def carregar_fiscal_seguro(arquivo):
     df.columns = colunas_limpas
     return df
 
-# Extração de PDF com suporte à números com espaços vazios
 def extrair_dados_extrato(file, termos_ignorar):
     transacoes = []
     if file.name.lower().endswith(".pdf"):
@@ -140,7 +137,6 @@ def extrair_dados_extrato(file, termos_ignorar):
                             
                             valores_dinheiro = []
                             for v in sub_valores_raw:
-                                # CORREÇÃO CRÍTICA 2: Captura os valores totais independente de tabulações vazias
                                 if re.search(r'[\d\s]+,\d{2}', v):
                                     valores_dinheiro.append(limpar_valor(v))
                                     
@@ -165,14 +161,12 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
                                 
                                 if val_final > 0 or "SALDO INICIAL" in desc_txt:
-                                    # Limpeza Profunda do histórico sem amputar nomes reais
-                                    desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt) # CPFs e CNPJs
-                                    desc_txt = re.sub(r'\b[A-Z0-9]{25,35}\b', '', desc_txt, flags=re.IGNORECASE) # Chaves Longas
-                                    
+                                    desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt)
+                                    desc_txt = re.sub(r'\b[A-Z0-9]{25,35}\b', '', desc_txt, flags=re.IGNORECASE)
                                     for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO"]:
                                         desc_txt = desc_txt.replace(t, '')
                                         
-                                    desc_txt = re.sub(r'R\$\s*\d*|\bRS\b\s*\d*', '', desc_txt) # Remove moeda/RS isolada
+                                    desc_txt = re.sub(r'R\$\s*\d*|\bRS\b\s*\d*', '', desc_txt)
                                     desc_txt = normalizar_espacos(desc_txt).strip('," -.')
                                     
                                     if "SALDO INICIAL" in sub_descs[k].upper():
@@ -331,17 +325,21 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # CONSTRUÇÃO DO HISTÓRICO COM PADRÃO CÉLULA A CÉLULA
+        # =====================================================================
+        # BLOCO DE PROTEÇÃO E MONTAGEM RIGOROSA DE HISTÓRICO 
+        # =====================================================================
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
                 'Histórico': normalizar_espacos(f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}")
             })
         else:
-            if match_fiscal and match_fiscal['nota'] != '-':
-                txt_hist = f"PAGTO NF {match_fiscal['nota']} {match_fiscal['name_f']}"
-            elif match_fiscal:
-                txt_hist = f"PAGTO {match_fiscal['name_f']}"
+            # Se encontrou no cruzamento, DELETA todo o texto do Banco e usa SÓ a NF
+            if match_fiscal:
+                if match_fiscal['nota'] != '-':
+                    txt_hist = f"PAGTO NF {match_fiscal['nota']} {match_fiscal['name_f']}"
+                else:
+                    txt_hist = f"PAGTO {match_fiscal['name_f']}"
             else:
                 txt_hist = f"PAGTO {trans['Fav']}"
                 
@@ -368,12 +366,10 @@ if f_fiscal and f_fornec and f_extratos:
     df_display['Saídas'] = df_display['Saídas'].apply(formatar_moeda_br)
     st.dataframe(df_display, use_container_width=True)
     
-    # 1. Geração da planilha Excel (.XLSX)
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False, sheet_name='Conciliação')
         
-    # 2. Geração do Arquivo de texto Domínio (.TXT)
     txt_content = gerar_txt_dominio_5_colunas(df_final, cod_empresa_txt, cnpj_empresa_txt)
     txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
     
