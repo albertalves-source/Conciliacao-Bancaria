@@ -137,8 +137,9 @@ def extrair_dados_extrato(file, termos_ignorar):
                             
                             valores_dinheiro = []
                             for v in sub_valores_raw:
-                                if re.search(r'[\d\s]+,\d{2}', v):
-                                    valores_dinheiro.append(limpar_valor(v))
+                                # CORREÇÃO VITAL: Regex lendo pontos e espaços de valores altos
+                                m = re.search(r'[\d\s\.]+,\d{2}', v)
+                                if m: valores_dinheiro.append(limpar_valor(m.group(0)))
                                     
                             min_len = min(len(sub_datas), len(sub_descs))
                             valores_movimento = []
@@ -161,13 +162,17 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
                                 
                                 if val_final > 0 or "SALDO INICIAL" in desc_txt:
-                                    desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt)
+                                    # Limpeza Extrema (Remove sufixos de lixo)
+                                    desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt) 
                                     desc_txt = re.sub(r'\b[A-Z0-9]{25,35}\b', '', desc_txt, flags=re.IGNORECASE)
-                                    for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO"]:
-                                        desc_txt = desc_txt.replace(t, '')
+                                    
+                                    for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO", "TRANSFERENCIA INTERNA ENTRE CONTAS", "TRANSFERENCIA INTERNA"]:
+                                        desc_txt = re.sub(t, '', desc_txt, flags=re.IGNORECASE)
                                         
-                                    desc_txt = re.sub(r'R\$\s*\d*|\bRS\b\s*\d*', '', desc_txt)
-                                    desc_txt = normalizar_espacos(desc_txt).strip('," -.')
+                                    # Erradicando múltiplas menções a R$
+                                    desc_txt = re.sub(r'(?:R\$|RS)\s*\d*', '', desc_txt, flags=re.IGNORECASE)
+                                    desc_txt = re.sub(r'-\s*', ' ', desc_txt)
+                                    desc_txt = " ".join(desc_txt.split()).strip('," -.')
                                     
                                     if "SALDO INICIAL" in sub_descs[k].upper():
                                         desc_txt = "TRANSFERENCIA INTERNA ENTRE CONTAS"
@@ -183,7 +188,7 @@ def extrair_dados_extrato(file, termos_ignorar):
                             linha_upper = linha.upper()
                             if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
                             data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
-                            valor_match = re.findall(r'-?[\d\s.]*,\d{2}', linha)
+                            valor_match = re.findall(r'-?[\d\s\.]*,\d{2}', linha)
                             if data_match and valor_match:
                                 is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT"])
                                 val = abs(limpar_valor(valor_match[0]))
@@ -325,16 +330,13 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # =====================================================================
-        # BLOCO DE PROTEÇÃO E MONTAGEM RIGOROSA DE HISTÓRICO 
-        # =====================================================================
+        # ESTRUTURA BLINDADA DO HISTÓRICO - Impõe a limpeza forçada se cruzar
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
                 'Histórico': normalizar_espacos(f"RECB {match_fiscal['name_f'] if match_fiscal else trans['Fav']}")
             })
         else:
-            # Se encontrou no cruzamento, DELETA todo o texto do Banco e usa SÓ a NF
             if match_fiscal:
                 if match_fiscal['nota'] != '-':
                     txt_hist = f"PAGTO NF {match_fiscal['nota']} {match_fiscal['name_f']}"
