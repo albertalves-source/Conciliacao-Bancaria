@@ -60,19 +60,50 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
+# VASSOURA INTELIGENTE (Erradica CPFs, Bancos, Chaves Pix e o "R$")
+def limpar_historico_banco(texto, is_credito=False):
+    t = str(texto).upper()
+    t = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', t) 
+    t = re.sub(r'\b[A-Z0-9]{25,35}\b', '', t, flags=re.IGNORECASE)
+    
+    termos = [
+        "PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE.", "PIX DE MESMA TITULARIDADE", 
+        "PIX DEVOLVIDO RECEBIDO", "TRANSFERENCIA INTERNA ENTRE CONTAS", 
+        "TRANSFERENCIA INTERNA", "TED RECEBIDA", "(PIXSENDSELF)", "RECEBIMENTO"
+    ]
+    for termo in termos: t = t.replace(termo, '')
+        
+    bancos = [
+        "BCO DO BRASIL S.A.", "CAIXA ECONOMICA FEDERAL", "BANCO INTER", 
+        "ITAÚ UNIBANCO S.A.", "BCO SANTANDER (BRASIL) S.A.", "BANCO BTG PACTUAL S.A.", 
+        "STONE IP S.A.", "BCO BRADESCO S.A.", "NU PAGAMENTOS - IP", "NU PAGAMENTOS IP", 
+        "BCO C6 S.A.", "DOCK IP S.A.", "ASAAS IP S.A.", "DELCRED SCD S.A.", "SICREDI RECIFE", 
+        "CCLA SUDOESTE GOIANO", "MERCADO PAGO IP LTDA.", "CCLA DA PARAÍBA - SICOOB PARAÍBA", 
+        "PAGSEGURO INTERNET IP S.A.", "FITS IP", "CORA SCFI", "ACG IP S.A."
+    ]
+    for banco in bancos: t = t.replace(banco, '')
+        
+    t = re.sub(r'(?:-\s*)?(?:R\$|RS)\s*\d*(?:\s*(?:R\$|RS))?', '', t, flags=re.IGNORECASE)
+    t = t.replace('-', ' ')
+    t = re.sub(r'\s{2,}', ' ', t)
+    t = normalizar_espacos(t).strip(' ,"-.')
+    
+    if not t or t == "":
+        t = "TRANSFERENCIA INTERNA ENTRE CONTAS" if is_credito else "PAGAMENTO DE BOLETO"
+        
+    return t
+
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
     
-    if nome_pesquisa_norm in dicionario_fornecedores:
-        return dicionario_fornecedores[nome_pesquisa_norm]
+    if nome_pesquisa_norm in dicionario_fornecedores: return dicionario_fornecedores[nome_pesquisa_norm]
         
     for nome_bd_norm, codigo in dicionario_fornecedores.items():
         if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm) or (nome_pesquisa_norm[:8] in nome_bd_norm):
             return codigo
             
-    if codigo_fiscal_fallback and codigo_fiscal_fallback != '-':
-        return codigo_fiscal_fallback
+    if codigo_fiscal_fallback and codigo_fiscal_fallback != '-': return codigo_fiscal_fallback
     return ""
 
 def carregar_fiscal_seguro(arquivo):
@@ -137,9 +168,8 @@ def extrair_dados_extrato(file, termos_ignorar):
                             
                             valores_dinheiro = []
                             for v in sub_valores_raw:
-                                # CORREÇÃO VITAL: Regex lendo pontos e espaços de valores altos
-                                m = re.search(r'[\d\s\.]+,\d{2}', v)
-                                if m: valores_dinheiro.append(limpar_valor(m.group(0)))
+                                if re.search(r'[\d\s\.]+,\d{2}', v):
+                                    valores_dinheiro.append(limpar_valor(v))
                                     
                             min_len = min(len(sub_datas), len(sub_descs))
                             valores_movimento = []
@@ -147,8 +177,7 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 if len(valores_dinheiro) >= 4:
                                     valores_movimento = [valores_dinheiro[0], valores_dinheiro[1], valores_dinheiro[3]]
                             else:
-                                if valores_dinheiro:
-                                    valores_movimento = [valores_dinheiro[0]]
+                                if valores_dinheiro: valores_movimento = [valores_dinheiro[0]]
                                     
                             for k in range(min_len):
                                 data_match = re.search(r'(\d{2}/\d{2}/\d{4})', sub_datas[k])
@@ -162,26 +191,12 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
                                 
                                 if val_final > 0 or "SALDO INICIAL" in desc_txt:
-                                    # Limpeza Extrema (Remove sufixos de lixo)
-                                    desc_txt = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', desc_txt) 
-                                    desc_txt = re.sub(r'\b[A-Z0-9]{25,35}\b', '', desc_txt, flags=re.IGNORECASE)
-                                    
-                                    for t in ["PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE", "PIX DEVOLVIDO RECEBIDO", "TRANSFERENCIA INTERNA ENTRE CONTAS", "TRANSFERENCIA INTERNA"]:
-                                        desc_txt = re.sub(t, '', desc_txt, flags=re.IGNORECASE)
-                                        
-                                    # Erradicando múltiplas menções a R$
-                                    desc_txt = re.sub(r'(?:R\$|RS)\s*\d*', '', desc_txt, flags=re.IGNORECASE)
-                                    desc_txt = re.sub(r'-\s*', ' ', desc_txt)
-                                    desc_txt = " ".join(desc_txt.split()).strip('," -.')
-                                    
-                                    if "SALDO INICIAL" in sub_descs[k].upper():
-                                        desc_txt = "TRANSFERENCIA INTERNA ENTRE CONTAS"
+                                    if "SALDO INICIAL" in desc_txt:
                                         is_credito = True
                                         val_final = 1300000.0
-                                        
-                                    if not desc_txt or desc_txt in ["", "-"]:
-                                        desc_txt = "TRANSFERENCIA INTERNA ENTRE CONTAS" if is_credito else "PAGAMENTO DE BOLETO"
-                                        
+                                    
+                                    # CHAMA A FUNÇÃO DE LIMPEZA PARA TODOS OS REGISTROS DO BANCO
+                                    desc_txt = limpar_historico_banco(desc_txt, is_credito)
                                     transacoes.append({'Data': data_match.group(1), 'Total': val_final, 'Fav': desc_txt, 'Is_Credito': is_credito})
                     else:
                         for linha in texto_bruto.split('\n'):
@@ -195,7 +210,8 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 desc_bruta = linha.replace(data_match.group(1), "")
                                 for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
                                 if val > 0:
-                                    transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': normalizar_espacos(desc_bruta).strip('," '), 'Is_Credito': is_credito})
+                                    desc_limpa = limpar_historico_banco(desc_bruta, is_credito)
+                                    transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
     return transacoes
 
@@ -330,7 +346,7 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # ESTRUTURA BLINDADA DO HISTÓRICO - Impõe a limpeza forçada se cruzar
+        # MONTAGEM FINAL COM OS PREFIXOS E NF QUANDO CRUZADO
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
