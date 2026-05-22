@@ -186,13 +186,11 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 if any(x in desc_txt for x in ["SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
                                 if any(t in desc_txt for t in termos_ignorar if t): continue
                                 
-                                # CORREÇÃO: Identifica crédito verificando a ausência do sinal de menos na string bruta do valor
                                 raw_v_str = sub_valores_raw[k] if k < len(sub_valores_raw) else ""
                                 is_debito = "-" in raw_v_str or "-RS" in raw_v_str or "-R$" in raw_v_str
                                 
                                 is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA", "PIX DEVOLVIDO"])
                                 
-                                # Transf. Internas e Saldo Inicial sem sinal de menos são CRÉDITOS
                                 if ("TRANSFERENCIA INTERNA" in desc_txt or "SALDO INICIAL" in desc_txt) and not is_debito:
                                     is_credito = True
                                 
@@ -220,7 +218,17 @@ def extrair_dados_extrato(file, termos_ignorar):
                                     desc_limpa = limpar_historico_banco(desc_bruta, is_credito)
                                     transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
-    return transacoes
+        
+    # --- FILTRO ANTI-DUPLICIDADE DE LINHAS FANTASMAS ---
+    transacoes_dedup = []
+    vistos = set()
+    for t in transacoes:
+        identificador = (t['Data'], t['Total'], t['Fav'], t['Is_Credito'])
+        if identificador not in vistos:
+            vistos.add(identificador)
+            transacoes_dedup.append(t)
+            
+    return transacoes_dedup
 
 def gerar_txt_dominio_5_colunas(df_final, cod_empresa, cnpj_empresa):
     linhas = []
@@ -291,7 +299,6 @@ if f_fiscal and f_fornec and f_extratos:
     entries_list = []
     current_entry = None
     
-    # CORREÇÃO: Captura de IRRF/CRF mesmo se estiver na mesma linha do lançamento principal
     for idx, row in df_fiscal_bruto.iterrows():
         cod_lanc = str(row.get('codigo_lancamento', '')).strip()
         tipo_imp = str(row.get('tipo_imposto', '')).strip().upper()
@@ -348,7 +355,7 @@ if f_fiscal and f_fornec and f_extratos:
             
             val_match = (abs(v_banco_round - round(ent['valor_bruto'], 2)) <= 0.1) or \
                         (abs(v_banco_round - v_liquido) <= 0.1) or \
-                        (ent['valor_bruto'] == 0.0) # Proteção para NFs zeradas no fiscal (ex: KR3W)
+                        (ent['valor_bruto'] == 0.0)
                         
             dif_dias = abs((ent['dt_obj'] - dt_banco_obj).days) if ent['dt_obj'] else 999
             
@@ -357,7 +364,7 @@ if f_fiscal and f_fornec and f_extratos:
                 ent['matched'] = True
                 break
 
-        # PASSO 2: Match Cego por Valor Exato (Para Boletos Genéricos e Erros de Digitação)
+        # PASSO 2: Match Cego por Valor Exato (Proteção contra Boletos Falsos)
         if not match_fiscal and not is_credito:
             for ent in entries_list:
                 if ent['matched'] or (ent['valor_bruto'] != 0.0 and is_credito): continue
@@ -370,15 +377,24 @@ if f_fiscal and f_fornec and f_extratos:
                             
                 dif_dias = abs((ent['dt_obj'] - dt_banco_obj).days) if ent['dt_obj'] else 999
                 
-                if dif_dias <= tolerancia_dias and val_match and v_banco > 0:
+                # --- TRAVA PARA BOLETOS: Tolerância de no máximo 2 dias e sem nome ---
+                is_boleto_generico = ("BOLETO" in fav_banco_norm)
+                dias_permitidos = 2 if is_boleto_generico else tolerancia_dias
+                
+                if dif_dias <= dias_permitidos and val_match and v_banco > 0:
                     match_fiscal = ent
                     ent['matched'] = True
                     break
 
+        # ATRIBUIÇÃO DE CÓDIGOS
         if match_fiscal:
             cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd, match_fiscal['cod_f'])
         else:
-            cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd, "-")
+            # Só atribui código de fornecedor se o nome não for genericamente um Boleto/Imposto
+            if "BOLETO" in fav_banco_norm or "MINISTERIO DA FAZENDA" in fav_banco_norm.upper():
+                cod_forn_final = ""
+            else:
+                cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd, "-")
 
         if cod_forn_final == '-': cod_forn_final = ""
 
