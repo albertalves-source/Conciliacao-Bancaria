@@ -92,27 +92,24 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-# --- CORREÇÃO CIRÚRGICA DA BUSCA DE FORNECEDORES (ANTI-COLISÃO DE SOBRENOME) ---
+# --- CÓDIGO BLINDADO ANTI-COLISÃO ---
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
     
-    # 1. Passo: Busca por correspondência exata
     if nome_pesquisa_norm in dicionario_fornecedores: 
         return dicionario_fornecedores[nome_pesquisa_norm]
         
-    # 2. Passo: Busca por Início do Nome (Impede que 'Ribeiro Ind.' case com 'Gabriel Ribeiro')
     for nome_bd_norm, codigo in dicionario_fornecedores.items():
+        # Exige que a palavra comece igual para evitar que Ribeiro no final case com Gabriel Ribeiro no começo
         if nome_pesquisa_norm.startswith(nome_bd_norm) or nome_bd_norm.startswith(nome_pesquisa_norm):
             return codigo
 
-    # 3. Passo: Busca por contenção robusta (Apenas se o nome for longo para evitar falsos positivos)
     if len(nome_pesquisa_norm) >= 12:
         for nome_bd_norm, codigo in dicionario_fornecedores.items():
             if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm):
                 return codigo
             
-    # 4. Passo: Fallback do arquivo fiscal se for código válido
     if codigo_fiscal_fallback and codigo_fiscal_fallback != '-' and str(codigo_fiscal_fallback).strip() != "":
         if len(str(codigo_fiscal_fallback)) >= 3:
             return codigo_fiscal_fallback
@@ -361,8 +358,8 @@ if f_fiscal and f_fornec and f_extratos:
             if ent['matched'] or (ent['valor_bruto'] != 0.0 and is_credito): continue 
             
             nome_f_norm = normalizar_para_match(ent['name_f'])
-            nome_bate = (len(nome_f_norm) >= 6 and nome_f_norm[:6] in fav_banco_norm) or \
-                        (len(fav_banco_norm) >= 6 and fav_banco_norm[:6] in nome_f_norm)
+            # Blinda a verificação do nome no arquivo fiscal para garantir correspondência forte
+            nome_bate = (nome_f_norm in fav_banco_norm) or (fav_banco_norm in nome_f_norm)
             
             v_liquido = round(ent['valor_bruto'] - ent['irrf'] - ent['crf'], 2)
             v_banco_round = round(v_banco, 2)
