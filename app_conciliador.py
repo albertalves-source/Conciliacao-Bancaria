@@ -60,7 +60,6 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# VASSOURA INTELIGENTE (Erradica CPFs, Bancos, Chaves Pix e o "R$")
 def limpar_historico_banco(texto, is_credito=False):
     t = str(texto).upper()
     t = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', t) 
@@ -100,7 +99,7 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fisc
     if nome_pesquisa_norm in dicionario_fornecedores: return dicionario_fornecedores[nome_pesquisa_norm]
         
     for nome_bd_norm, codigo in dicionario_fornecedores.items():
-        if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm) or (nome_pesquisa_norm[:8] in nome_bd_norm):
+        if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm) or (len(nome_pesquisa_norm) > 5 and nome_pesquisa_norm[:6] in nome_bd_norm):
             return codigo
             
     if codigo_fiscal_fallback and codigo_fiscal_fallback != '-': return codigo_fiscal_fallback
@@ -187,15 +186,19 @@ def extrair_dados_extrato(file, termos_ignorar):
                                 if any(x in desc_txt for x in ["SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
                                 if any(t in desc_txt for t in termos_ignorar if t): continue
                                 
+                                # CORREÇÃO: Identifica crédito verificando a ausência do sinal de menos na string bruta do valor
+                                raw_v_str = sub_valores_raw[k] if k < len(sub_valores_raw) else ""
+                                is_debito = "-" in raw_v_str or "-RS" in raw_v_str or "-R$" in raw_v_str
+                                
                                 is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA", "PIX DEVOLVIDO"])
+                                
+                                # Transf. Internas e Saldo Inicial sem sinal de menos são CRÉDITOS
+                                if ("TRANSFERENCIA INTERNA" in desc_txt or "SALDO INICIAL" in desc_txt) and not is_debito:
+                                    is_credito = True
+                                
                                 val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
                                 
                                 if val_final > 0 or "SALDO INICIAL" in desc_txt:
-                                    if "SALDO INICIAL" in desc_txt:
-                                        is_credito = True
-                                        val_final = 1300000.0
-                                    
-                                    # CHAMA A FUNÇÃO DE LIMPEZA PARA TODOS OS REGISTROS DO BANCO
                                     desc_txt = limpar_historico_banco(desc_txt, is_credito)
                                     transacoes.append({'Data': data_match.group(1), 'Total': val_final, 'Fav': desc_txt, 'Is_Credito': is_credito})
                     else:
@@ -205,7 +208,11 @@ def extrair_dados_extrato(file, termos_ignorar):
                             data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
                             valor_match = re.findall(r'-?[\d\s\.]*,\d{2}', linha)
                             if data_match and valor_match:
+                                is_debito = "-" in valor_match[0]
                                 is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT"])
+                                if "TRANSFERENCIA INTERNA" in linha_upper and not is_debito:
+                                    is_credito = True
+                                    
                                 val = abs(limpar_valor(valor_match[0]))
                                 desc_bruta = linha.replace(data_match.group(1), "")
                                 for v_txt in valor_match: desc_bruta = desc_bruta.replace(v_txt, "")
@@ -283,8 +290,13 @@ if f_fiscal and f_fornec and f_extratos:
     df_fiscal_bruto = carregar_fiscal_seguro(f_fiscal)
     entries_list = []
     current_entry = None
+    
+    # CORREÇÃO: Captura de IRRF/CRF mesmo se estiver na mesma linha do lançamento principal
     for idx, row in df_fiscal_bruto.iterrows():
         cod_lanc = str(row.get('codigo_lancamento', '')).strip()
+        tipo_imp = str(row.get('tipo_imposto', '')).strip().upper()
+        v_imp = abs(limpar_valor(row.get('valor_imposto', 0)))
+        
         if cod_lanc.isdigit():
             v_bruto = abs(limpar_valor(row.get('valor_total', 0)))
             dt_obj = converter_data_dominio(row.get('data'))
@@ -297,15 +309,14 @@ if f_fiscal and f_fornec and f_extratos:
                 'cod_f': str(row.get('codigo_fornecedor_doc', '-')).split('.')[0],
                 'name_f': nome_f,
                 'valor_bruto': v_bruto,
-                'irrf': 0.0, 'crf': 0.0,
+                'irrf': v_imp if 'IRRF' in tipo_imp else 0.0,
+                'crf': v_imp if 'CRF' in tipo_imp else 0.0,
                 'matched': False
             }
             entries_list.append(current_entry)
-        elif current_entry is not None and pd.isna(row.get('codigo_lancamento')) and pd.notna(row.get('tipo_imposto')):
-            tipo = str(row.get('tipo_imposto')).strip().upper()
-            v_imp = abs(limpar_valor(row.get('valor_imposto', 0)))
-            if 'IRRF' in tipo: current_entry['irrf'] = v_imp
-            elif 'CRF' in tipo: current_entry['crf'] = v_imp
+        elif current_entry is not None and not cod_lanc.isdigit():
+            if 'IRRF' in tipo_imp: current_entry['irrf'] += v_imp
+            elif 'CRF' in tipo_imp: current_entry['crf'] += v_imp
 
     extrato_lista = []
     for f in f_extratos:
@@ -319,25 +330,50 @@ if f_fiscal and f_fornec and f_extratos:
         v_banco = trans['Total']
         is_credito = trans['Is_Credito']
         
+        try: dt_banco_obj = datetime.strptime(trans['Data'], '%d/%m/%Y').date()
+        except: dt_banco_obj = datetime.now().date()
+            
         match_fiscal = None
+        
+        # PASSO 1: Match por Nome (flexível) e Valor (Bruto ou Líquido)
         for ent in entries_list:
-            if ent['matched']: continue
-            if ent['valor_bruto'] != 0.0 and is_credito: continue 
+            if ent['matched'] or (ent['valor_bruto'] != 0.0 and is_credito): continue 
             
             nome_f_norm = normalizar_para_match(ent['name_f'])
-            nome_bate = (nome_f_norm[:8] in fav_banco_norm) or (fav_banco_norm[:8] in nome_f_norm)
+            nome_bate = (len(nome_f_norm) >= 6 and nome_f_norm[:6] in fav_banco_norm) or \
+                        (len(fav_banco_norm) >= 6 and fav_banco_norm[:6] in nome_f_norm)
             
-            try:
-                dt_banco_obj = datetime.strptime(trans['Data'], '%d/%m/%Y').date()
+            v_liquido = round(ent['valor_bruto'] - ent['irrf'] - ent['crf'], 2)
+            v_banco_round = round(v_banco, 2)
+            
+            val_match = (abs(v_banco_round - round(ent['valor_bruto'], 2)) <= 0.1) or \
+                        (abs(v_banco_round - v_liquido) <= 0.1) or \
+                        (ent['valor_bruto'] == 0.0) # Proteção para NFs zeradas no fiscal (ex: KR3W)
+                        
+            dif_dias = abs((ent['dt_obj'] - dt_banco_obj).days) if ent['dt_obj'] else 999
+            
+            if dif_dias <= tolerancia_dias and val_match and nome_bate:
+                match_fiscal = ent
+                ent['matched'] = True
+                break
+
+        # PASSO 2: Match Cego por Valor Exato (Para Boletos Genéricos e Erros de Digitação)
+        if not match_fiscal and not is_credito:
+            for ent in entries_list:
+                if ent['matched'] or (ent['valor_bruto'] != 0.0 and is_credito): continue
+                
+                v_liquido = round(ent['valor_bruto'] - ent['irrf'] - ent['crf'], 2)
+                v_banco_round = round(v_banco, 2)
+                
+                val_match = (abs(v_banco_round - round(ent['valor_bruto'], 2)) <= 0.1) or \
+                            (abs(v_banco_round - v_liquido) <= 0.1)
+                            
                 dif_dias = abs((ent['dt_obj'] - dt_banco_obj).days) if ent['dt_obj'] else 999
-            except: dif_dias = 999
-            
-            if dif_dias <= tolerancia_dias:
-                v_liquido = ent['valor_bruto'] - ent['irrf'] - ent['crf']
-                if ent['valor_bruto'] == 0.0 and nome_bate:
-                    match_fiscal = ent; ent['matched'] = True; break
-                elif (abs(v_banco - ent['valor_bruto']) < 0.1 or abs(v_banco - v_liquido) < 0.1) and nome_bate:
-                    match_fiscal = ent; ent['matched'] = True; break
+                
+                if dif_dias <= tolerancia_dias and val_match and v_banco > 0:
+                    match_fiscal = ent
+                    ent['matched'] = True
+                    break
 
         if match_fiscal:
             cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd, match_fiscal['cod_f'])
@@ -346,7 +382,6 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # MONTAGEM FINAL COM OS PREFIXOS E NF QUANDO CRUZADO
         if is_credito:
             matriz_saida.append({
                 'Data': trans['Data'], 'Deb': '', 'Cred': red_banco, 'Saídas': v_banco,
