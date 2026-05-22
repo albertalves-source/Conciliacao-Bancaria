@@ -92,21 +92,27 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-# FIX AUDITORIA: Prioridade máxima para a tabela oficial de Fornecedores (FORNEC BET DA SORTE)
+# --- CORREÇÃO CIRÚRGICA DA BUSCA DE FORNECEDORES (ANTI-COLISÃO DE SOBRENOME) ---
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
     
-    # 1. Busca exata no plano de contas (Cadastro de Fornecedores)
+    # 1. Passo: Busca por correspondência exata
     if nome_pesquisa_norm in dicionario_fornecedores: 
         return dicionario_fornecedores[nome_pesquisa_norm]
         
-    # 2. Busca por aproximação no plano de contas (Cadastro de Fornecedores)
+    # 2. Passo: Busca por Início do Nome (Impede que 'Ribeiro Ind.' case com 'Gabriel Ribeiro')
     for nome_bd_norm, codigo in dicionario_fornecedores.items():
-        if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm) or (len(nome_pesquisa_norm) > 5 and nome_pesquisa_norm[:6] in nome_bd_norm):
+        if nome_pesquisa_norm.startswith(nome_bd_norm) or nome_bd_norm.startswith(nome_pesquisa_norm):
             return codigo
+
+    # 3. Passo: Busca por contenção robusta (Apenas se o nome for longo para evitar falsos positivos)
+    if len(nome_pesquisa_norm) >= 12:
+        for nome_bd_norm, codigo in dicionario_fornecedores.items():
+            if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm):
+                return codigo
             
-    # 3. Fallback seguro: só adota o código do arquivo fiscal se for um código válido e longo
+    # 4. Passo: Fallback do arquivo fiscal se for código válido
     if codigo_fiscal_fallback and codigo_fiscal_fallback != '-' and str(codigo_fiscal_fallback).strip() != "":
         if len(str(codigo_fiscal_fallback)) >= 3:
             return codigo_fiscal_fallback
@@ -392,7 +398,6 @@ if f_fiscal and f_fornec and f_extratos:
                     ent['matched'] = True
                     break
 
-        # CORREÇÃO HIERÁRQUICA: Mapeamento de códigos estrito contra Procv Cego
         if match_fiscal:
             cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd, match_fiscal['cod_f'])
         else:
@@ -403,7 +408,6 @@ if f_fiscal and f_fornec and f_extratos:
 
         if cod_forn_final == '-': cod_forn_final = ""
 
-        # Trava para evitar sobreposição semântica indevida de fornecedores ("Morim" vs "Leonardo Amorim")
         if "MORIM SERVICOS" in str(trans['Fav']).upper() and cod_forn_final == "1983":
             cod_forn_final = ""
 
