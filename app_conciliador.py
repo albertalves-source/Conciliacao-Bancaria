@@ -249,9 +249,10 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         val_float = limpar_valor(row['Saídas'])
         if val_float <= 0: continue
         
-        hist_texto = str(row['Histórico']).strip().replace(';', ',').replace('\r', '').replace('\n', ' ')
+        hist_texto = str(row.get('Histórico', '')).strip().replace(';', ',').replace('\r', '').replace('\n', ' ')
         if hist_texto.lower() == 'nan': hist_texto = ""
         
+        # ESCUDO ANTI-NF RESIDUAL: Ignora linhas que começam apenas com "NF "
         if hist_texto.upper().startswith("NF "):
             continue
             
@@ -261,17 +262,25 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         cod_cred = str(row.get('Cred', '')).strip()
         if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
         
-        # AGORA, SE NÃO TIVER CÓDIGO, FICA EM BRANCO ("") EM VEZ DE "9999"
         if cod_deb.lower() in ['-', 'nan', 'none', '']: cod_deb = ""
         if cod_cred.lower() in ['-', 'nan', 'none', '']: cod_cred = ""
         
         val_str = f"{val_float:.2f}".replace('.', ',')
         
         data_val = row.get('Data', '')
-        if isinstance(data_val, pd.Timestamp) or isinstance(data_val, datetime):
+        if pd.isna(data_val):
+            data_str = ""
+        elif isinstance(data_val, (pd.Timestamp, datetime)):
             data_str = data_val.strftime('%d/%m/%Y')
         else:
             data_str = str(data_val).strip()
+            if ' ' in data_str: 
+                data_str = data_str.split(' ')[0]
+            if re.match(r'^\d{4}-\d{2}-\d{2}$', data_str):
+                try:
+                    data_str = datetime.strptime(data_str, '%Y-%m-%d').strftime('%d/%m/%Y')
+                except:
+                    pass
         
         linha = f"{data_str};{cod_deb};{cod_cred};{val_str};;{hist_texto};;;;"
         linhas.append(linha)
@@ -436,6 +445,8 @@ with tab1:
                     'Histórico': normalizar_espacos(txt_hist)
                 })
 
+        # --- A INJEÇÃO DE NOTAS FISCAIS RESIDUAIS FOI TOTALMENTE REMOVIDA DAQUI ---
+
         df_final = pd.DataFrame(matriz_saida)
         colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
         df_final = df_final[colunas_leiaute]
@@ -484,7 +495,6 @@ with tab2:
         try:
             df_editado = pd.read_excel(f_editado)
             
-            # PREENCHIMENTO AUTOMÁTICO SE MANDAR O CADASTRO NA ABA 2
             if f_fornec_tab2:
                 if f_fornec_tab2.name.endswith('.csv'):
                     try: df_f2 = pd.read_csv(f_fornec_tab2, header=None, dtype=str, sep=None, engine='python')
@@ -499,16 +509,17 @@ with tab2:
                         nome = str(r[1]).strip().upper()
                         if cod and nome: fmap2[normalizar_para_match(nome)] = cod
                 
-                # Varre a planilha e procura códigos para os débitos vazios
                 for idx, row in df_editado.iterrows():
                     cod_deb = str(row.get('Deb', '')).strip()
                     if cod_deb.lower() in ['', 'nan', 'none', '-']:
                         hist = str(row.get('Histórico', '')).upper()
-                        # Limpa palavras iniciais para isolar o nome e pesquisar
                         nome_pesq = re.sub(r'^(PAGTO|RECB)\s*(NF\s*\d+\s*)?', '', hist).strip()
                         novo_cod = buscar_codigo_fornecedor(nome_pesq, fmap2)
                         if novo_cod:
                             df_editado.at[idx, 'Deb'] = novo_cod
+
+            # Aplica limpeza pré-visualização para o usuário ver que as NFs saíram
+            df_editado = df_editado[~df_editado['Histórico'].astype(str).str.upper().str.startswith("NF ")]
 
             st.success("Planilha processada com sucesso! Pré-visualização (linhas prontas para o TXT):")
             st.dataframe(df_editado, use_container_width=True)
