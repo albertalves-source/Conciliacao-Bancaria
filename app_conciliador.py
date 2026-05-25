@@ -92,9 +92,21 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
+# --- BUSCA INTELIGENTE BLINDADA ---
+def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
     if not nome_pesquisa: return ""
-    nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
+    
+    # Pré-limpeza pesada de ruídos (Arranca NFs, PAGTOs, CPFs e CNPJs)
+    nome_limpo = str(nome_pesquisa).upper()
+    nome_limpo = re.sub(r'^(PAGTO|RECB|PG\.)\s*', '', nome_limpo)
+    nome_limpo = re.sub(r'^(A\s+)', '', nome_limpo)
+    nome_limpo = re.sub(r'^(NF\s*\d+\s*)', '', nome_limpo)
+    nome_limpo = re.sub(r'\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b', '', nome_limpo) # Remove CNPJ
+    nome_limpo = re.sub(r'\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b', '', nome_limpo) # Remove CPF
+    nome_limpo = re.sub(r'\b\d{8}\b|\b\d{2}\.\d{3}\.\d{3}\b', '', nome_limpo) # Remove RGs
+    
+    nome_pesquisa_norm = normalizar_para_match(nome_limpo)
+    if not nome_pesquisa_norm: return ""
     
     if nome_pesquisa_norm in dicionario_fornecedores: 
         return dicionario_fornecedores[nome_pesquisa_norm]
@@ -103,15 +115,11 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fisc
         if nome_pesquisa_norm.startswith(nome_bd_norm) or nome_bd_norm.startswith(nome_pesquisa_norm):
             return codigo
 
-    if len(nome_pesquisa_norm) >= 12:
+    if len(nome_pesquisa_norm) >= 10:
         for nome_bd_norm, codigo in dicionario_fornecedores.items():
             if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm):
                 return codigo
-            
-    if codigo_fiscal_fallback and codigo_fiscal_fallback != '-' and str(codigo_fiscal_fallback).strip() != "":
-        if len(str(codigo_fiscal_fallback)) >= 3:
-            return codigo_fiscal_fallback
-            
+                
     return ""
 
 def carregar_fiscal_seguro(arquivo):
@@ -252,7 +260,7 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         hist_texto = str(row.get('Histórico', '')).strip().replace(';', ',').replace('\r', '').replace('\n', ' ')
         if hist_texto.lower() == 'nan': hist_texto = ""
         
-        # Filtro de NFs residuais blindado
+        # Filtro de NFs residuais
         if hist_texto.upper().startswith("NF "):
             continue
             
@@ -491,7 +499,6 @@ with tab2:
     
     if f_editado:
         try:
-            # TRAVA DE BLINDAGEM: dtype=str impede o Pandas de achar que código vazio é erro de int64!
             df_editado = pd.read_excel(f_editado, dtype=str)
             
             if f_fornec_tab2:
@@ -508,19 +515,19 @@ with tab2:
                         nome = str(r[1]).strip().upper()
                         if cod and nome: fmap2[normalizar_para_match(nome)] = cod
                 
+                # VARREDURA INTELIGENTE NA ABA 2 (Limpa lixo fiscal e preenche com fornecedor correto)
                 for idx, row in df_editado.iterrows():
                     cod_deb = str(row.get('Deb', '')).strip()
                     if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
                     
-                    if cod_deb.lower() in ['', 'nan', 'none', '-']:
-                        hist = str(row.get('Histórico', '')).upper()
-                        nome_pesq = re.sub(r'^(PAGTO|RECB)\s*(NF\s*\d+\s*)?', '', hist).strip()
-                        novo_cod = buscar_codigo_fornecedor(nome_pesq, fmap2)
+                    if cod_deb.lower() in ['', 'nan', 'none', '-'] or (cod_deb.isdigit() and len(cod_deb) <= 3):
+                        hist = str(row.get('Histórico', ''))
+                        novo_cod = buscar_codigo_fornecedor(hist, fmap2)
                         
                         if novo_cod:
                             df_editado.at[idx, 'Deb'] = novo_cod
-                    elif len(cod_deb) == 3 and cod_deb.isdigit():
-                        df_editado.at[idx, 'Deb'] = ""
+                        else:
+                            df_editado.at[idx, 'Deb'] = ""
 
             df_editado = df_editado[~df_editado['Histórico'].astype(str).str.upper().str.startswith("NF ")]
 
