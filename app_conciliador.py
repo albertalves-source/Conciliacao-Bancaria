@@ -92,8 +92,7 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-# --- CÓDIGO FISCAL REMOVIDO: SÓ CONFIA NO CADASTRO DE FORNECEDORES ---
-def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
+def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
     
@@ -109,7 +108,10 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
             if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm):
                 return codigo
             
-    # Se não achar nada, retorna VAZIO.
+    if codigo_fiscal_fallback and codigo_fiscal_fallback != '-' and str(codigo_fiscal_fallback).strip() != "":
+        if len(str(codigo_fiscal_fallback)) >= 3:
+            return codigo_fiscal_fallback
+            
     return ""
 
 def carregar_fiscal_seguro(arquivo):
@@ -260,9 +262,8 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         cod_cred = str(row.get('Cred', '')).strip()
         if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
         
-        # Garante que campos não identificados saiam VAZIOS e não com 9999
-        if cod_deb.lower() in ['-', 'nan', 'none', '9999']: cod_deb = ""
-        if cod_cred.lower() in ['-', 'nan', 'none', '9999']: cod_cred = ""
+        if cod_deb.lower() in ['-', 'nan', 'none', '']: cod_deb = ""
+        if cod_cred.lower() in ['-', 'nan', 'none', '']: cod_cred = ""
         
         val_str = f"{val_float:.2f}".replace('.', ',')
         
@@ -490,7 +491,8 @@ with tab2:
     
     if f_editado:
         try:
-            df_editado = pd.read_excel(f_editado)
+            # TRAVA DE BLINDAGEM: dtype=str impede o Pandas de achar que código vazio é erro de int64!
+            df_editado = pd.read_excel(f_editado, dtype=str)
             
             if f_fornec_tab2:
                 if f_fornec_tab2.name.endswith('.csv'):
@@ -515,14 +517,11 @@ with tab2:
                         nome_pesq = re.sub(r'^(PAGTO|RECB)\s*(NF\s*\d+\s*)?', '', hist).strip()
                         novo_cod = buscar_codigo_fornecedor(nome_pesq, fmap2)
                         
-                        # Se encontrou no cadastro, substitui na hora
                         if novo_cod:
                             df_editado.at[idx, 'Deb'] = novo_cod
                     elif len(cod_deb) == 3 and cod_deb.isdigit():
-                        # Elimina lixo fiscal de 3 dígitos que a analista esqueceu de apagar
                         df_editado.at[idx, 'Deb'] = ""
 
-            # Filtra na hora a tabela para remover NFs residuais antes de mostrar
             df_editado = df_editado[~df_editado['Histórico'].astype(str).str.upper().str.startswith("NF ")]
 
             st.success("Planilha processada com sucesso! Pré-visualização (linhas prontas para o TXT):")
