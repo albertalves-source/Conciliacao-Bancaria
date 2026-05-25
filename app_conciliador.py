@@ -238,7 +238,6 @@ def extrair_dados_extrato(file, termos_ignorar):
             
     return transacoes_dedup
 
-# --- GERADOR DE TXT BLINDADO E LIMPO ---
 def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
     linhas = []
     
@@ -250,7 +249,6 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         val_float = limpar_valor(row['Saídas'])
         if val_float <= 0: continue
         
-        # CORREÇÃO FANTASMA .0: Remove o decimal .0 do final que o Pandas injeta ao converter int com NaN
         cod_deb = str(row['Deb']).strip()
         if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
         
@@ -262,7 +260,6 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         
         val_str = f"{val_float:.2f}".replace('.', ',')
         
-        # SANITIZAÇÃO: Remove ponto e vírgula perdido no texto que quebra o layout do Domínio!
         hist_texto = str(row['Histórico']).strip().replace(';', ',').replace('\r', '').replace('\n', ' ')
         if hist_texto.lower() == 'nan': hist_texto = ""
         
@@ -409,6 +406,7 @@ with tab1:
                     cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd, "-")
 
             if cod_forn_final == '-': cod_forn_final = ""
+
             if "MORIM SERVICOS" in str(trans['Fav']).upper() and cod_forn_final == "1983":
                 cod_forn_final = ""
 
@@ -434,15 +432,7 @@ with tab1:
                     'Histórico': normalizar_espacos(txt_hist)
                 })
 
-        for ent in entries_list:
-            if not ent['matched']:
-                cod_forn_final = buscar_codigo_fornecedor(ent['name_f'], fornec_map_bd, ent['cod_f'])
-                if cod_forn_final == '-': cod_forn_final = ""
-                txt_hist = f"NF {ent['nota']} {ent['name_f']}" if ent['nota'] != '-' else f"NF {ent['name_f']}"
-                matriz_saida.append({
-                    'Data': ent['data_f'], 'Deb': cod_forn_final, 'Cred': '', 'Saídas': ent['valor_bruto'],
-                    'Histórico': normalizar_espacos(txt_hist)
-                })
+        # A INJEÇÃO FANTASMA DAS NFs RESIDUAIS FOI REMOVIDA DAQUI.
 
         df_final = pd.DataFrame(matriz_saida)
         colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
