@@ -92,7 +92,8 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fiscal_fallback=""):
+# --- CÓDIGO FISCAL REMOVIDO: SÓ CONFIA NO CADASTRO DE FORNECEDORES ---
+def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
     if not nome_pesquisa: return ""
     nome_pesquisa_norm = normalizar_para_match(nome_pesquisa)
     
@@ -108,10 +109,7 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores, codigo_fisc
             if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm):
                 return codigo
             
-    if codigo_fiscal_fallback and codigo_fiscal_fallback != '-' and str(codigo_fiscal_fallback).strip() != "":
-        if len(str(codigo_fiscal_fallback)) >= 3:
-            return codigo_fiscal_fallback
-            
+    # Se não achar nada, retorna VAZIO.
     return ""
 
 def carregar_fiscal_seguro(arquivo):
@@ -252,7 +250,7 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         hist_texto = str(row.get('Histórico', '')).strip().replace(';', ',').replace('\r', '').replace('\n', ' ')
         if hist_texto.lower() == 'nan': hist_texto = ""
         
-        # ESCUDO ANTI-NF RESIDUAL: Ignora linhas que começam apenas com "NF "
+        # Filtro de NFs residuais blindado
         if hist_texto.upper().startswith("NF "):
             continue
             
@@ -262,8 +260,9 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         cod_cred = str(row.get('Cred', '')).strip()
         if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
         
-        if cod_deb.lower() in ['-', 'nan', 'none', '']: cod_deb = ""
-        if cod_cred.lower() in ['-', 'nan', 'none', '']: cod_cred = ""
+        # Garante que campos não identificados saiam VAZIOS e não com 9999
+        if cod_deb.lower() in ['-', 'nan', 'none', '9999']: cod_deb = ""
+        if cod_cred.lower() in ['-', 'nan', 'none', '9999']: cod_cred = ""
         
         val_str = f"{val_float:.2f}".replace('.', ',')
         
@@ -411,12 +410,12 @@ with tab1:
                         break
 
             if match_fiscal:
-                cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd, match_fiscal['cod_f'])
+                cod_forn_final = buscar_codigo_fornecedor(match_fiscal['name_f'], fornec_map_bd)
             else:
                 if "BOLETO" in fav_banco_norm or "MINISTERIO DA FAZENDA" in fav_banco_norm.upper():
                     cod_forn_final = ""
                 else:
-                    cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd, "-")
+                    cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd)
 
             if cod_forn_final == '-': cod_forn_final = ""
 
@@ -444,8 +443,6 @@ with tab1:
                     'Saídas': v_banco,
                     'Histórico': normalizar_espacos(txt_hist)
                 })
-
-        # --- A INJEÇÃO DE NOTAS FISCAIS RESIDUAIS FOI TOTALMENTE REMOVIDA DAQUI ---
 
         df_final = pd.DataFrame(matriz_saida)
         colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
@@ -511,14 +508,21 @@ with tab2:
                 
                 for idx, row in df_editado.iterrows():
                     cod_deb = str(row.get('Deb', '')).strip()
+                    if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
+                    
                     if cod_deb.lower() in ['', 'nan', 'none', '-']:
                         hist = str(row.get('Histórico', '')).upper()
                         nome_pesq = re.sub(r'^(PAGTO|RECB)\s*(NF\s*\d+\s*)?', '', hist).strip()
                         novo_cod = buscar_codigo_fornecedor(nome_pesq, fmap2)
+                        
+                        # Se encontrou no cadastro, substitui na hora
                         if novo_cod:
                             df_editado.at[idx, 'Deb'] = novo_cod
+                    elif len(cod_deb) == 3 and cod_deb.isdigit():
+                        # Elimina lixo fiscal de 3 dígitos que a analista esqueceu de apagar
+                        df_editado.at[idx, 'Deb'] = ""
 
-            # Aplica limpeza pré-visualização para o usuário ver que as NFs saíram
+            # Filtra na hora a tabela para remover NFs residuais antes de mostrar
             df_editado = df_editado[~df_editado['Histórico'].astype(str).str.upper().str.startswith("NF ")]
 
             st.success("Planilha processada com sucesso! Pré-visualização (linhas prontas para o TXT):")
