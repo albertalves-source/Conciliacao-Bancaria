@@ -18,8 +18,9 @@ REGRAS_FIXAS_FORNECEDOR = {
     "LEGITIMUZ": "1352",
     "LUCK VIAGENS": "1668",
     "ESMERA EMPREENDIMENTOS": "1703",
-    "CELCOIN": "5", # Se sobrar só Celcoin, joga pra conta da Pixbet
-    "CONNECTPS": "5" # Caso ConnectPS seja a processadora principal
+    "CELCOIN": "5", 
+    "CONNECTPS": "5",
+    "DELBANK": "5"
 }
 
 # --- FUNÇÕES DE APOIO E LIMPEZA ---
@@ -82,22 +83,20 @@ def sanitize_dataframe_for_excel(df):
 def limpar_historico_banco(texto, is_credito=False):
     t = str(texto).upper()
     
-    t = re.sub(r'\bE\d{14}[A-Z0-9]*\b', '', t)
+    # 🧹 Remove Lixo de PIX Grudado e Bancário
+    t = re.sub(r'\bE\d{14}[A-Z0-9]*\b', '', t) # PIX IDs
+    t = re.sub(r'\d{2,4}\d{2}/\d{2}/\d{2,4}.*', '', t) # Data cortada no final
     
-    prefixos = r'(?:D[EÉ]BITO TRANSFERE|D[EÉ]BITO TRANFEREN|PIX ENVIADO|CR[EÉ]DITO PIX RECEBIDO|PIX RECEBIDO|CR[EÉ]DITO TRANSFERE|CR[EÉ]DITO DEVOLU[CÇ][AÃ]O|DESCONTO DE|TRANSFER[EÊ]NCIA INTERNA|PAGAMENTO DE BOLETO)'
+    prefixos = r'(?:PAGTO|RECB|PG\.|D[EÉ]BITO TRANSFERE|D[EÉ]BITO TRANFEREN|PIX ENVIADO|CR[EÉ]DITO PIX RECEBIDO|PIX RECEBIDO|CR[EÉ]DITO TRANSFERE|CR[EÉ]DITO DEVOLU[CÇ][AÃ]O|DESCONTO DE|TRANSFER[EÊ]NCIA INTERNA|PAGAMENTO DE BOLETO|D[EÉ]BITO|CR[EÉ]DITO)'
     sufixos = r'(?:CELCOIN IP|CELCOIN|BANCO ISPB|ISPB|DELBANK|C6 BANK|DOCK IP S\.A\.?|DOCK IP|BCO DO|BCO\b)'
     
-    match = re.search(rf'{prefixos}\s+(.*?)\s+{sufixos}', t)
-    if match:
-        t = match.group(1).strip()
-    else:
-        t = re.sub(prefixos, '', t).strip()
-        t = re.sub(sufixos, '', t).strip()
-        t = re.sub(r'\b\d{4}\s+\d{8,15}\s+\d{6,10}\b', '', t) 
-        t = re.sub(r'\b[A-F0-9]{4,8}\b', '', t) 
-        t = re.sub(r'\b\d{2}/\d{2}/\d{2,4}.*', '', t) 
-        
-    t = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', t) 
+    t = re.sub(prefixos, '', t).strip()
+    t = re.sub(sufixos, '', t).strip()
+    
+    t = re.sub(r'\b[A-F0-9]{4,10}\b', '', t) # Hashes hexadecimais do PIX (ex: 72DC7958)
+    t = re.sub(r'\b\d{4}\s+\d{8,15}\s+\d{6,10}\b', '', t) # Agências e contas em bloco
+    t = re.sub(r'\b\d{5,}\b', '', t) # Qualquer número solto gigante
+    
     t = t.replace('-', ' ')
     t = re.sub(r'\s{2,}', ' ', t)
     t = normalizar_espacos(t).strip(' ,"-.')
@@ -107,7 +106,6 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-# --- BUSCA INTELIGENTE BLINDADA ---
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
     if not nome_pesquisa: return ""
     
@@ -186,77 +184,49 @@ def extrair_dados_extrato(file, termos_ignorar):
             with pdfplumber.open(file) as pdf:
                 for page in pdf.pages:
                     texto_bruto = page.extract_text() or ""
+                    texto_bruto = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', texto_bruto)
                     
-                    if '","' in texto_bruto or '\n\n' in texto_bruto:
-                        f_io = io.StringIO(texto_bruto)
-                        reader = csv.reader(f_io, delimiter=',', quotechar='"')
-                        for row in reader:
-                            if len(row) < 2: continue
-                            sub_datas = [d.strip() for d in row[0].split('\n') if d.strip()]
-                            sub_descs = [d.strip() for d in row[1].split('\n') if d.strip()]
-                            idx_valor = -2 if len(row) >= 4 else -1
-                            sub_valores_raw = [v.strip() for v in row[idx_valor].split('\n') if v.strip()]
+                    for linha in texto_bruto.split('\n'):
+                        linha_upper = linha.upper()
+                        if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
+                        
+                        # LEITOR A LASER: Trata o texto FLABET (Grudado) vs Normal
+                        # Ex: 30/04/2026213986.570,77PAGTO
+                        match_grudado = re.search(r'(\d{2}/\d{2}/\d{4})\s*(\d{4})?\s*(-?(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})\s*([A-Z].*)', linha_upper)
+                        
+                        if match_grudado:
+                            str_data = match_grudado.group(1)
+                            str_valor = match_grudado.group(3)
+                            desc_bruta = match_grudado.group(4)
                             
-                            valores_dinheiro = []
-                            for v in sub_valores_raw:
-                                if re.search(r'-?\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}', v):
-                                    valores_dinheiro.append(limpar_valor(v))
-                                    
-                            min_len = min(len(sub_datas), len(sub_descs))
-                            valores_movimento = []
-                            if any("SALDO INICIAL" in d.upper() for d in sub_descs):
-                                if len(valores_dinheiro) >= 4:
-                                    valores_movimento = [valores_dinheiro[0], valores_dinheiro[1], valores_dinheiro[3]]
-                            else:
-                                if valores_dinheiro: valores_movimento = [valores_dinheiro[0]]
-                                    
-                            for k in range(min_len):
-                                data_match = re.search(r'(\d{2}/\d{2}/\d{4})', sub_datas[k])
-                                if not data_match: continue
-                                
-                                desc_txt = sub_descs[k].upper()
-                                if any(x in desc_txt for x in ["SALDO FINAL", "TOTAL ACUMULADOR", "RESUMO"]): continue
-                                if any(t in desc_txt for t in termos_ignorar if t): continue
-                                
-                                raw_v_str = sub_valores_raw[k] if k < len(sub_valores_raw) else ""
-                                is_debito = "-" in raw_v_str or "-RS" in raw_v_str or "-R$" in raw_v_str
-                                
-                                is_credito = any(x in desc_txt for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDITO", "CRÉDITO", "DEPÓSITO", "TED RECEBIDA", "PIX DEVOLVIDO"])
-                                
-                                if ("TRANSFERENCIA INTERNA" in desc_txt or "SALDO INICIAL" in desc_txt) and not is_debito:
-                                    is_credito = True
-                                
-                                val_final = valores_movimento[k] if k < len(valores_movimento) else (valores_dinheiro[0] if valores_dinheiro else 0.0)
-                                
-                                if val_final > 0 or "SALDO INICIAL" in desc_txt:
-                                    desc_txt = limpar_historico_banco(desc_txt, is_credito)
-                                    transacoes.append({'Data': data_match.group(1), 'Total': val_final, 'Fav': desc_txt, 'Is_Credito': is_credito})
-                    else:
-                        for linha in texto_bruto.split('\n'):
-                            linha_upper = linha.upper()
-                            if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
+                            is_debito = "-" in str_valor or "PAGTO" in desc_bruta or "DÉBITO" in desc_bruta or "DEBITO" in desc_bruta
+                            is_credito = any(x in desc_bruta for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT", "RECB"])
                             
-                            # ✂️ SEPARADOR A LASER (Resolve o problema do texto grudado "30/04/2026213986.570,77PAGTO")
-                            padrao_grudado = re.search(r'(\d{2}/\d{2}/\d{4})\s*(\d{4})?\s*(-?(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})\s*(.*)', linha_upper)
-                            
-                            if padrao_grudado:
-                                str_data = padrao_grudado.group(1)
-                                str_valor = padrao_grudado.group(3)
-                                desc_bruta = padrao_grudado.group(4)
+                            if ("TRANSFERENCIA INTERNA" in desc_bruta or "SALDO INICIAL" in desc_bruta) and not is_debito:
+                                is_credito = True
                                 
-                                is_debito = "-" in str_valor
-                                is_credito = any(x in desc_bruta for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT"])
-                                if "TRANSFERENCIA INTERNA" in desc_bruta and not is_debito:
-                                    is_credito = True
-                                    
-                                val = abs(limpar_valor(str_valor))
-                                if val > 0:
-                                    desc_limpa = limpar_historico_banco(desc_bruta, is_credito)
-                                    transacoes.append({'Data': str_data, 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
+                            val = abs(limpar_valor(str_valor))
+                            if val > 0:
+                                desc_limpa = limpar_historico_banco(desc_bruta, is_credito)
+                                transacoes.append({'Data': str_data, 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
         
-    # LIMITADOR REMOVIDO: Puxa 100% dos lançamentos reais da fatura, sem deduplicar
-    return transacoes
+    from collections import Counter
+    contagem_bruta = Counter((t['Data'], t['Total'], t['Fav'], t['Is_Credito']) for t in transacoes)
+
+    MAX_REPETICOES_PERMITIDAS = 3
+    transacoes_dedup = []
+    contagem_inserida = {}
+    for t in transacoes:
+        chave = (t['Data'], t['Total'], t['Fav'], t['Is_Credito'])
+        inseridas = contagem_inserida.get(chave, 0)
+        total_brutas = contagem_bruta[chave]
+        limite = min(total_brutas, MAX_REPETICOES_PERMITIDAS)
+        if inseridas < limite:
+            transacoes_dedup.append(t)
+            contagem_inserida[chave] = inseridas + 1
+            
+    return transacoes_dedup
 
 def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
     linhas = []
@@ -332,8 +302,6 @@ with tab1:
     with col3: f_extratos = st.file_uploader("📄 Extrato Bancário", type=["pdf"], accept_multiple_files=True)
 
     if f_fiscal and f_fornec and f_extratos:
-        
-        # Leitura Inteligente do Arquivo de Fornecedores
         if f_fornec.name.endswith('.csv'):
             try: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str, sep=None, engine='python')
             except: df_forn_raw = pd.read_csv(f_fornec, header=None, dtype=str)
@@ -345,7 +313,6 @@ with tab1:
             row_vals = [str(x).strip() for x in r.values if pd.notna(x)]
             if len(row_vals) >= 2:
                 v1, v2 = row_vals[0], row_vals[1]
-                # Descobre qual coluna tem letras (Nome) e qual só tem números (Código)
                 if any(c.isalpha() for c in v2) and not any(c.isalpha() for c in v1):
                     cod, nome = v1, v2
                 elif any(c.isalpha() for c in v1) and not any(c.isalpha() for c in v2):
@@ -451,14 +418,12 @@ with tab1:
                 cod_forn_final = buscar_codigo_fornecedor(trans['Fav'], fornec_map_bd)
 
             if cod_forn_final == '-': cod_forn_final = ""
-            if "MORIM SERVICOS" in str(trans['Fav']).upper() and cod_forn_final == "1983":
-                cod_forn_final = ""
 
             cod_credito_final = ""
             if is_credito:
                 if "TRANSFERENCIA INTERNA" in str(trans['Fav']).upper():
                     cod_credito_final = "1121"
-                elif "PIXBET" in str(trans['Fav']).upper() or "CONNECTPS" in str(trans['Fav']).upper():
+                elif "PIXBET" in str(trans['Fav']).upper() or "CONNECTPS" in str(trans['Fav']).upper() or "DELBANK" in str(trans['Fav']).upper():
                     cod_credito_final = "5"
                     
                 matriz_saida.append({
@@ -482,9 +447,9 @@ with tab1:
                     'Histórico': normalizar_espacos(txt_hist)
                 })
 
-        df_final = pd.DataFrame(matriz_saida)
+        # TRAVA ANTI-CRASH DA TABELA
         colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
-        df_final = df_final[colunas_leiaute]
+        df_final = pd.DataFrame(matriz_saida, columns=colunas_leiaute)
         
         df_final = sanitize_dataframe_for_excel(df_final)
 
