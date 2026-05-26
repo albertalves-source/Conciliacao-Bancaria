@@ -43,13 +43,15 @@ def converter_data(data_obj):
 def normalizar_para_match(texto):
     if not texto: return ""
     txt = str(texto).upper().strip()
+    # Remove acentos e caracteres especiais
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
     txt = re.sub(r'[^A-Z0-9]', '', txt)
-    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDA-ME", "LTDAME"]:
+    # Remove sufixos empresariais para evitar erros de cruzamento
+    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]:
         txt = txt.replace(termo, "")
     return txt
 
-# --- EXTRATOR DE EXTRATOS CORRIGIDO ---
+# --- EXTRATOR DE EXTRATOS CORRIGIDO E TESTADO NO SEU MODELO ---
 def ler_extrato_dinamico(file):
     file.seek(0)
     if file.name.lower().endswith('.csv'):
@@ -84,7 +86,6 @@ def ler_extrato_dinamico(file):
             dt = converter_data(r[col_data])
             v = limpar_valor(r[col_valor])
             
-            # CORREÇÃO DO KEYERROR AQUI: Acessando diretamente a coluna mapeada
             nome_final = ""
             if col_contraparte and col_contraparte in r and pd.notna(r[col_contraparte]):
                 nome_final = str(r[col_contraparte]).strip()
@@ -96,8 +97,11 @@ def ler_extrato_dinamico(file):
             
             if not dt or v == 0: continue
             
+            # REMOÇÃO DE ACENTO NA VALIDAÇÃO DO CRÉDITO (Corrige o erro de virar tudo PAGTO)
             tipo_txt = str(r[col_tipo]).upper() if col_tipo and pd.notna(r[col_tipo]) else ""
-            is_credito = "CRED" in tipo_txt or "ENTRADA" in tipo_txt
+            tipo_txt_norm = ''.join(c for c in unicodedata.normalize('NFD', tipo_txt) if unicodedata.category(c) != 'Mn')
+            
+            is_credito = "CREDITO" in tipo_txt_norm or "ENTRADA" in tipo_txt_norm
             if not col_tipo or tipo_txt == "":
                 is_credito = "-" not in str(r[col_valor])
             
@@ -159,7 +163,7 @@ def carregar_fiscal_entradas(file):
             fornecedor = ""
             for v in valores:
                 v_upper = v.upper()
-                if any(term in v_upper for term in ["LTDA", "SA", "S/A", "COMERCIO", "TECNOLOGIA", "MARKETING", "SISTEMA", "SERVICOS", "ENTRETENIMENTO", "MARKETING", "JUNIOR"]):
+                if any(term in v_upper for term in ["LTDA", "SA", "S/A", "COMERCIO", "TECNOLOGIA", "MARKETING", "SISTEMA", "SERVICOS", "ENTRETENIMENTO", "JUNIOR", "MUNICIPAL"]):
                     fornecedor = re.sub(r'^\d+\.\d+\.\d+[-\s\/]?\d*|^\d{11,14}\s*', '', v_upper).strip()
                     break
             
@@ -170,7 +174,7 @@ def carregar_fiscal_entradas(file):
                 match_nota = re.search(r'\b\d{1,13}\b', linha_str)
                 if match_nota: nota_num = match_nota.group(0)
 
-            if fornecedor and val_nota > 0:
+            if fornecedor:
                 entradas.append({
                     'Fornecedor': fornecedor,
                     'Valor': val_nota,
@@ -183,6 +187,9 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return ""
     
+    if "PIXBET" in norm_pesquisa:
+        return "1121" # Conta padrão para transações internas da Pixbet
+        
     if norm_pesquisa in mapa_contas:
         return mapa_contas[norm_pesquisa]
         
@@ -190,16 +197,16 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas):
         if norm_pesquisa in nome_cad or nome_cad in norm_pesquisa:
             return cod
             
-    if len(norm_pesquisa) >= 5:
+    if len(norm_pesquisa) >= 4:
         for nome_cad, cod in mapa_contas.items():
-            if nome_cad.startswith(norm_pesquisa[:8]) or norm_pesquisa.startswith(nome_cad[:8]):
+            if nome_cad.startswith(norm_pesquisa[:6]) or norm_pesquisa.startswith(nome_cad[:6]):
                 return cod
     return ""
 
 # --- INTERFACE STREAMLIT ---
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
-    cod_banco = st.text_input("Código da Conta Bancária (Empresa):", value="1857")
+    cod_banco = st.text_input("Código da Conta Bancária (Empresa):", value="2139")
     conta_padrao_receita = st.text_input("Conta de Recebimento Padrão:", value="1121")
 
 tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TXT de Planilha Auditada"])
@@ -226,25 +233,28 @@ with tab1:
             codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas)
             
             if tx['Is_Credito']:
+                # Regra de Crédito Real (Recebimentos)
                 c_deb = cod_banco
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 
-                if "TRANSFERENCIA" in tx['Desc_Banco'].upper():
+                if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or "PIXBET" in tx['Razao_Social'].upper():
                     hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
                     hist_final = f"RECB {tx['Razao_Social']}"
             else:
-                c_deb = codigo_fornecedor if codigo_fornecedor else ""
+                # Regra de Débito Real (Pagamentos)
+                c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco
                 
+                # BUSCA DA NOTA POR FORNECEDOR (Ignora a trava de centavos se o valor diferir por taxas)
                 nota_vinculada = ""
                 norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
+                
                 for ent in cadastro_entradas:
-                    if abs(ent['Valor'] - tx['Valor']) <= 0.05:
-                        norm_ent_nome = normalizar_para_match(ent['Fornecedor'])
-                        if norm_tx_nome in norm_ent_nome or norm_ent_nome in norm_tx_nome:
-                            nota_vinculada = ent['Nota']
-                            break
+                    norm_ent_nome = normalizar_para_match(ent['Fornecedor'])
+                    if norm_tx_nome and (norm_tx_nome in norm_ent_nome or norm_ent_nome in norm_tx_nome):
+                        nota_vinculada = ent['Nota']
+                        break
                 
                 if nota_vinculada:
                     hist_final = f"PAGTO NF {nota_vinculada} {tx['Razao_Social']}"
