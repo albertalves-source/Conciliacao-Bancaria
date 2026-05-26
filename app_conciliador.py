@@ -49,8 +49,6 @@ def converter_data_dominio(data_obj):
 
 def normalizar_espacos(texto):
     if not isinstance(texto, str): return ""
-    # BLINDAGEM CONTRA O ERRO "IllegalCharacterError" DO EXCEL
-    # Remove caracteres de controle ASCII invisíveis que o PDF injeta e o Excel odeia
     texto = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', texto)
     return " ".join(texto.upper().split())
 
@@ -95,33 +93,46 @@ def limpar_historico_banco(texto, is_credito=False):
         
     return t
 
-# --- BUSCA INTELIGENTE BLINDADA ---
+# --- BUSCA INTELIGENTE SUPER-BLINDADA ---
 def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
     if not nome_pesquisa: return ""
     
     nome_limpo = str(nome_pesquisa).upper()
-    nome_limpo = re.sub(r'^(PAGTO|RECB|PG\.)\s*', '', nome_limpo)
-    nome_limpo = re.sub(r'^(A\s+)', '', nome_limpo)
-    nome_limpo = re.sub(r'^(NF\s*\d+\s*)', '', nome_limpo)
+    
+    # 🧹 Vassoura de lixo bancário (Destrói termos do novo PDF)
+    termos_ruido = [
+        r'^(PAGTO|RECB|PG\.)\s*', r'^(A\s+)', r'^(NF\s*\d+\s*)',
+        r'\bD[EÉ]BITO\b', r'\bCR[EÉ]DITO\b', r'\bTRANSFERE\b', r'\bTRANFEREN\b',
+        r'\bPIX ENVIADO\b', r'\bPIX RECEBIDO\b', r'\bPIX\b', r'\bCELCOIN\b', r'\bIP\b', 
+        r'\bBANCO\b', r'\bISPB\b', r'\bTED\b', r'\bDOC\b', r'\bDESCONTO DE\b', r'\bS\.A\.?\b'
+    ]
+    for ruido in termos_ruido:
+        nome_limpo = re.sub(ruido, '', nome_limpo).strip()
+        
+    # Remove CPFs, CNPJs e Códigos de PIX gigantes que atrapalham o nome
     nome_limpo = re.sub(r'\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b', '', nome_limpo) 
     nome_limpo = re.sub(r'\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b', '', nome_limpo) 
-    nome_limpo = re.sub(r'\b\d{8}\b|\b\d{2}\.\d{3}\.\d{3}\b', '', nome_limpo) 
+    nome_limpo = re.sub(r'\b[A-Z0-9]{15,}\b', '', nome_limpo)
     
     nome_pesquisa_norm = normalizar_para_match(nome_limpo)
     if not nome_pesquisa_norm: return ""
     
+    # 1. Tenta Match Exato
     if nome_pesquisa_norm in dicionario_fornecedores: 
         return dicionario_fornecedores[nome_pesquisa_norm]
         
+    # 2. Tenta Match por Início de Frase
     for nome_bd_norm, codigo in dicionario_fornecedores.items():
         if nome_pesquisa_norm.startswith(nome_bd_norm) or nome_bd_norm.startswith(nome_pesquisa_norm):
             return codigo
 
-    if len(nome_pesquisa_norm) >= 10:
-        for nome_bd_norm, codigo in dicionario_fornecedores.items():
-            if (nome_pesquisa_norm in nome_bd_norm) or (nome_bd_norm in nome_pesquisa_norm):
-                return codigo
-                
+    # 3. Match Parcial Agressivo (Se as primeiras 6 letras baterem, puxa o código)
+    for nome_bd_norm, codigo in dicionario_fornecedores.items():
+        if len(nome_bd_norm) >= 6 and nome_bd_norm[:6] in nome_pesquisa_norm:
+            return codigo
+        if len(nome_pesquisa_norm) >= 6 and nome_pesquisa_norm[:6] in nome_bd_norm:
+            return codigo
+            
     return ""
 
 def carregar_fiscal_seguro(arquivo):
@@ -185,7 +196,8 @@ def extrair_dados_extrato(file, termos_ignorar):
                             
                             valores_dinheiro = []
                             for v in sub_valores_raw:
-                                if re.search(r'[\d\s\.]+,\d{2}', v):
+                                # CORREÇÃO DE VALOR: Impede de pegar PIX ID colado no valor
+                                if re.search(r'-?\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}', v):
                                     valores_dinheiro.append(limpar_valor(v))
                                     
                             min_len = min(len(sub_datas), len(sub_descs))
@@ -222,7 +234,10 @@ def extrair_dados_extrato(file, termos_ignorar):
                             linha_upper = linha.upper()
                             if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
                             data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
-                            valor_match = re.findall(r'-?[\d\s\.]*,\d{2}', linha)
+                            
+                            # CORREÇÃO DE VALOR: Isola apenas o dinheiro, ignorando o PIX ID
+                            valor_match = re.findall(r'-?\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}', linha)
+                            
                             if data_match and valor_match:
                                 is_debito = "-" in valor_match[0]
                                 is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT"])
@@ -237,7 +252,6 @@ def extrair_dados_extrato(file, termos_ignorar):
                                     transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
         
-    # CORREÇÃO: deduplicação por contagem
     from collections import Counter
     contagem_bruta = Counter((t['Data'], t['Total'], t['Fav'], t['Is_Credito']) for t in transacoes)
 
@@ -252,7 +266,7 @@ def extrair_dados_extrato(file, termos_ignorar):
         if inseridas < limite:
             transacoes_dedup.append(t)
             contagem_inserida[chave] = inseridas + 1
-
+            
     return transacoes_dedup
 
 def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
@@ -274,9 +288,11 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
             
         cod_deb = str(row.get('Deb', '')).strip()
         if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
+        if len(cod_deb) == 3 and cod_deb.isdigit(): cod_deb = ""
         
         cod_cred = str(row.get('Cred', '')).strip()
         if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
+        if len(cod_cred) == 3 and cod_cred.isdigit(): cod_cred = ""
         
         if cod_deb.lower() in ['-', 'nan', 'none', '']: cod_deb = ""
         if cod_cred.lower() in ['-', 'nan', 'none', '']: cod_cred = ""
@@ -539,8 +555,7 @@ with tab2:
                     
                     if cod_deb.lower() in ['', 'nan', 'none', '-']:
                         hist = str(row.get('Histórico', ''))
-                        nome_pesq = re.sub(r'^(PAGTO|RECB)\s*(NF\s*\d+\s*)?', '', hist).strip()
-                        novo_cod = buscar_codigo_fornecedor(nome_pesq, fmap2)
+                        novo_cod = buscar_codigo_fornecedor(hist, fmap2)
                         
                         if novo_cod:
                             df_editado.at[idx, 'Deb'] = novo_cod
