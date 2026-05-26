@@ -49,6 +49,9 @@ def converter_data_dominio(data_obj):
 
 def normalizar_espacos(texto):
     if not isinstance(texto, str): return ""
+    # BLINDAGEM CONTRA O ERRO "IllegalCharacterError" DO EXCEL
+    # Remove caracteres de controle ASCII invisíveis que o PDF injeta e o Excel odeia
+    texto = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', texto)
     return " ".join(texto.upper().split())
 
 def normalizar_para_match(texto):
@@ -234,28 +237,17 @@ def extrair_dados_extrato(file, termos_ignorar):
                                     transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
         
-    # CORREÇÃO: deduplicação por contagem, não por presença
-    # Lançamentos reais com mesma data/valor/favorecido (ex: 2 boletos de R$2.500 no mesmo dia)
-    # devem ser mantidos. Só removemos se o mesmo registro apareceu mais de uma vez
-    # por causa de bug de leitura de página (mesmo índice de página lido duas vezes).
-    # Estratégia: conta quantas vezes cada combinação aparece na lista bruta,
-    # depois monta a lista final respeitando essa contagem.
+    # CORREÇÃO: deduplicação por contagem
     from collections import Counter
     contagem_bruta = Counter((t['Data'], t['Total'], t['Fav'], t['Is_Credito']) for t in transacoes)
 
-    # Heurística: o PDF raramente tem mais de ~200 transações por página.
-    # Se uma combinação idêntica aparece mais de 3 vezes, é provável artefato de leitura;
-    # limitamos a no máximo 3 ocorrências para evitar explosão, mas na prática
-    # 2 lançamentos iguais no mesmo dia são perfeitamente válidos.
     MAX_REPETICOES_PERMITIDAS = 3
-
     transacoes_dedup = []
-    contagem_inserida: dict = {}
+    contagem_inserida = {}
     for t in transacoes:
         chave = (t['Data'], t['Total'], t['Fav'], t['Is_Credito'])
         inseridas = contagem_inserida.get(chave, 0)
         total_brutas = contagem_bruta[chave]
-        # Permite repetir até o número real de ocorrências (cap em MAX_REPETICOES_PERMITIDAS)
         limite = min(total_brutas, MAX_REPETICOES_PERMITIDAS)
         if inseridas < limite:
             transacoes_dedup.append(t)
@@ -282,17 +274,15 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
             
         cod_deb = str(row.get('Deb', '')).strip()
         if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
-        # REGRA CORRIGIDA: NÃO apaga códigos de 3 dígitos do Débito.
-        # Contas contábeis legítimas como 536 têm 3 dígitos e devem ser preservadas.
-        # A remoção de código fiscal (3 dígitos) só faz sentido para o campo Crédito
-        # quando ele veio do relatório fiscal — não para débito de fornecedor/conta bancária.
         
         cod_cred = str(row.get('Cred', '')).strip()
         if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
-        if len(cod_cred) == 3 and cod_cred.isdigit(): cod_cred = ""
         
         if cod_deb.lower() in ['-', 'nan', 'none', '']: cod_deb = ""
         if cod_cred.lower() in ['-', 'nan', 'none', '']: cod_cred = ""
+        
+        if cod_deb == "" and cod_cred == "" and val_float == 0:
+            continue
         
         val_str = f"{val_float:.2f}".replace('.', ',')
         
@@ -314,13 +304,12 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         linha = f"{data_str};{cod_deb};{cod_cred};{val_str};;{hist_texto};;;;"
         linhas.append(linha)
         
-    return "\r\n".join(linhas) + "\r\n"
+    return "\r\n".join(linhas)
 
 # --- INTERFACE ---
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
     cod_banco_txt = st.text_input("Código da Conta Bancária:", value="1857")
-    incluir_cabecalho = st.checkbox("Incluir Cabeçalho no TXT", value=False)
     
     st.divider()
     ignorar_data = st.checkbox("Ignorar Validação de Datas", value=True)
@@ -486,11 +475,11 @@ with tab1:
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             df_final.to_excel(writer, index=False, sheet_name='Conciliação')
             
-        txt_content = gerar_txt_dominio_delimitado(df_final, incluir_cabecalho)
-        txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
+        txt_com_cabecalho = gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=True).encode('iso-8859-1', errors='replace')
+        txt_sem_cabecalho = gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False).encode('iso-8859-1', errors='replace')
         
         st.markdown("---")
-        c_btn1, c_btn2 = st.columns(2)
+        c_btn1, c_btn2, c_btn3 = st.columns(3)
         with c_btn1:
             st.download_button(
                 label="📥 Baixar Planilha (.XLSX)",
@@ -501,9 +490,17 @@ with tab1:
             )
         with c_btn2:
             st.download_button(
-                label="📄 Baixar Arquivo Domínio (.TXT)",
-                data=txt_bytes,
-                file_name=f"Importacao_Dominio_{datetime.now().strftime('%Y%m%d')}.txt",
+                label="📄 Baixar TXT (SEM Cabeçalho)",
+                data=txt_sem_cabecalho,
+                file_name=f"Domínio_SEM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+        with c_btn3:
+            st.download_button(
+                label="📄 Baixar TXT (COM Cabeçalho)",
+                data=txt_com_cabecalho,
+                file_name=f"Domínio_COM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
                 mime="text/plain",
                 use_container_width=True
             )
@@ -539,11 +536,7 @@ with tab2:
                 for idx, row in df_editado.iterrows():
                     cod_deb = str(row.get('Deb', '')).strip()
                     if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
-
-                    # REGRA CORRIGIDA: não apaga débito de 3 dígitos.
-                    # Contas contábeis legítimas (ex: 536) têm 3 dígitos.
                     
-                    # Se ficou vazio, tenta buscar no arquivo de fornecedores!
                     if cod_deb.lower() in ['', 'nan', 'none', '-']:
                         hist = str(row.get('Histórico', ''))
                         nome_pesq = re.sub(r'^(PAGTO|RECB)\s*(NF\s*\d+\s*)?', '', hist).strip()
@@ -557,15 +550,25 @@ with tab2:
             st.success("Planilha processada com sucesso! Pré-visualização (linhas prontas para o TXT):")
             st.dataframe(df_editado, use_container_width=True)
             
-            txt_content_editado = gerar_txt_dominio_delimitado(df_editado, incluir_cabecalho)
-            txt_bytes_editado = txt_content_editado.encode('iso-8859-1', errors='replace')
+            txt_com_cabecalho_editado = gerar_txt_dominio_delimitado(df_editado, incluir_cabecalho=True).encode('iso-8859-1', errors='replace')
+            txt_sem_cabecalho_editado = gerar_txt_dominio_delimitado(df_editado, incluir_cabecalho=False).encode('iso-8859-1', errors='replace')
             
-            st.download_button(
-                label="📄 Gerar Arquivo Domínio Editado (.TXT)",
-                data=txt_bytes_editado,
-                file_name=f"Importacao_Dominio_Editado_{datetime.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
+            c_btn1_e, c_btn2_e = st.columns(2)
+            with c_btn1_e:
+                st.download_button(
+                    label="📄 Baixar TXT Editado (SEM Cabeçalho)",
+                    data=txt_sem_cabecalho_editado,
+                    file_name=f"Domínio_Editado_SEM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+            with c_btn2_e:
+                st.download_button(
+                    label="📄 Baixar TXT Editado (COM Cabeçalho)",
+                    data=txt_com_cabecalho_editado,
+                    file_name=f"Domínio_Editado_COM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
         except Exception as e:
             st.error(f"Erro ao ler a planilha: {e}")
