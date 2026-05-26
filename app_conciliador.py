@@ -43,16 +43,13 @@ def converter_data(data_obj):
 def normalizar_para_match(texto):
     if not texto: return ""
     txt = str(texto).upper().strip()
-    # Remove acentos
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
-    # Remove pontuações e caracteres especiais, mantendo apenas letras e números
     txt = re.sub(r'[^A-Z0-9]', '', txt)
-    # Remove termos comuns que causam distorção no cruzamento
-    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS"]:
+    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDA-ME", "LTDAME"]:
         txt = txt.replace(termo, "")
     return txt
 
-# --- EXTRATOR INTELIGENTE DE EXTRATOS (CSV, EXCEL, PDF) ---
+# --- EXTRATOR DE EXTRATOS CORRIGIDO ---
 def ler_extrato_dinamico(file):
     file.seek(0)
     if file.name.lower().endswith('.csv'):
@@ -64,7 +61,6 @@ def ler_extrato_dinamico(file):
     transacoes = []
     idx_header = None
     
-    # Identifica o cabeçalho correto com base no layout da Celcoin ou outros bancos
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
         if "NOME CONTRAPARTE" in valores or "DESCRIÇÃO" in valores or "HISTÓRICO" in valores:
@@ -76,10 +72,9 @@ def ler_extrato_dinamico(file):
         dados = df.iloc[idx_header+1:].copy()
         dados.columns = headers
         
-        # Mapeamento de colunas com base no arquivo Celcoin enviado
         col_data = next((c for c in headers if "DATA" in c), None)
         col_tipo = next((c for c in headers if "TIPO" in c or "NATUREZA" in c), None)
-        col_desc_banco = next((c for c in headers if "DESCRI" in c), None)
+        col_desc_banco = next((c for c in headers if "DESCRI" in c or "HIST" in c), None)
         col_contraparte = next((c for c in headers if "CONTRAPARTE" in c or "FAVORECIDO" in c), None)
         col_valor = next((c for c in headers if "VALOR" in c), None)
         
@@ -89,13 +84,22 @@ def ler_extrato_dinamico(file):
             dt = converter_data(r[col_data])
             v = limpar_valor(r[col_valor])
             
-            # Se o nome da contraparte estiver preenchido, usa ele, caso contrário usa a descrição básica
-            nome_final = str(r[r.get(col_contraparte)] if col_contraparte and pd.notna(r.get(col_contraparte)) else r.get(col_desc_banco, "")).strip()
-            desc_banco = str(r.get(col_desc_banco, "")).strip()
+            # CORREÇÃO DO KEYERROR AQUI: Acessando diretamente a coluna mapeada
+            nome_final = ""
+            if col_contraparte and col_contraparte in r and pd.notna(r[col_contraparte]):
+                nome_final = str(r[col_contraparte]).strip()
+            
+            if not nome_final and col_desc_banco and col_desc_banco in r and pd.notna(r[col_desc_banco]):
+                nome_final = str(r[col_desc_banco]).strip()
+                
+            desc_banco = str(r[col_desc_banco]).strip() if col_desc_banco and pd.notna(r[col_desc_banco]) else ""
             
             if not dt or v == 0: continue
             
-            is_credito = str(r.get(col_tipo, "")).upper() == "CRÉDITO" or str(r.get(col_tipo, "")).upper() == "CREDITO"
+            tipo_txt = str(r[col_tipo]).upper() if col_tipo and pd.notna(r[col_tipo]) else ""
+            is_credito = "CRED" in tipo_txt or "ENTRADA" in tipo_txt
+            if not col_tipo or tipo_txt == "":
+                is_credito = "-" not in str(r[col_valor])
             
             transacoes.append({
                 'Data': dt.strftime('%d/%m/%Y'),
@@ -120,7 +124,7 @@ def carregar_cadastro_contas(file):
         valores = [str(x).strip() for x in r.values if pd.notna(x)]
         if len(valores) >= 2:
             cod = valores[0].split('.')[0]
-            nome = valores[-1].upper().strip() # Pega a Razão Social da última coluna preenchida
+            nome = valores[-1].upper().strip()
             if cod.isdigit():
                 mapa[normalizar_para_match(nome)] = cod
     return mapa
@@ -134,37 +138,37 @@ def carregar_fiscal_entradas(file):
         
     entradas = []
     for _, row in df.iterrows():
-        linha_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
-        # Filtra linhas que possuem dados fiscais de fornecedor reais
-        if "TOTAL ACUMULADOR" in linha_str or "TOTAL GERAL" in linha_str: continue
-        
         valores = [str(x).strip() for x in row.values if pd.notna(x)]
-        if len(valores) >= 7:
-            # Captura a data da nota
+        linha_str = " ".join(valores).upper()
+        
+        if "TOTAL ACUMULADOR" in linha_str or "TOTAL GERAL" in linha_str or "ACOMPANHAMENTO" in linha_str: 
+            continue
+        
+        if len(valores) >= 6:
             dt_nota = None
             for v in valores:
                 dt_nota = converter_data(v)
                 if dt_nota: break
             
-            # Localiza o valor contábil e o nome do fornecedor na linha estruturada
             val_nota = 0.0
             for v in valores:
-                if "," in v and v.replace('.','').replace(',','').isdigit():
+                if "," in v and v.replace('.','').replace(',','').replace('-','').isdigit():
                     val_nota = limpar_valor(v)
                     break
             
-            # Captura o nome do Fornecedor (removendo CPFs/CNPJs que venham colados na mesma célula)
             fornecedor = ""
             for v in valores:
-                if any(term in v.upper() for term in ["LTDA", "SA", "S/A", "COMERCIO", "TECNOLOGIA", "MARKETING", "SISTEMA", "SERVICOS", "ENTRETENIMENTO"]):
-                    fornecedor = re.sub(r'^\d+\.\d+\.\d+[-\s\/]?\d*|^\d{11,14}\s*', '', v.upper()).strip()
+                v_upper = v.upper()
+                if any(term in v_upper for term in ["LTDA", "SA", "S/A", "COMERCIO", "TECNOLOGIA", "MARKETING", "SISTEMA", "SERVICOS", "ENTRETENIMENTO", "MARKETING", "JUNIOR"]):
+                    fornecedor = re.sub(r'^\d+\.\d+\.\d+[-\s\/]?\d*|^\d{11,14}\s*', '', v_upper).strip()
                     break
             
-            # Número da Nota Fiscal
             nota_num = ""
-            match_nota = re.search(r'\b\d{1,13}\b', " ".join(valores))
-            if match_nota:
-                nota_num = match_nota.group(0)
+            if len(valores) > 2 and valores[2].isdigit():
+                nota_num = valores[2]
+            else:
+                match_nota = re.search(r'\b\d{1,13}\b', linha_str)
+                if match_nota: nota_num = match_nota.group(0)
 
             if fornecedor and val_nota > 0:
                 entradas.append({
@@ -175,28 +179,24 @@ def carregar_fiscal_entradas(file):
                 })
     return entradas
 
-# --- BUSCA DE CONTAS INTELIGENTE POR PROXIMIDADE ---
 def buscar_codigo_conta(nome_pesquisa, mapa_contas):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return ""
     
-    # 1. Match Perfeito
     if norm_pesquisa in mapa_contas:
         return mapa_contas[norm_pesquisa]
         
-    # 2. Match por contido/contém (Ex: "CRAB DE BURGOS" localiza "CRAB DE BURGOS SOCIEDADE UNIPESSOAL LTDA")
     for nome_cad, cod in mapa_contas.items():
         if norm_pesquisa in nome_cad or nome_cad in norm_pesquisa:
             return cod
             
-    # 3. Match parcial por palavras iniciais significas (comprimento >= 5)
     if len(norm_pesquisa) >= 5:
         for nome_cad, cod in mapa_contas.items():
             if nome_cad.startswith(norm_pesquisa[:8]) or norm_pesquisa.startswith(nome_cad[:8]):
                 return cod
     return ""
 
-# --- INTERFACE FLUXO DE TRABALHO ---
+# --- INTERFACE STREAMLIT ---
 with st.sidebar:
     st.header("⚙️ Parâmetros Contábeis")
     cod_banco = st.text_input("Código da Conta Bancária (Empresa):", value="1857")
@@ -226,7 +226,6 @@ with tab1:
             codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas)
             
             if tx['Is_Credito']:
-                # Regra de Crédito: Banco recebe o Débito
                 c_deb = cod_banco
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 
@@ -235,15 +234,13 @@ with tab1:
                 else:
                     hist_final = f"RECB {tx['Razao_Social']}"
             else:
-                # Regra de Débito: Banco recebe o Crédito
                 c_deb = codigo_fornecedor if codigo_fornecedor else ""
                 c_crd = cod_banco
                 
-                # Tenta localizar Nota Fiscal no relatório de Entradas associando o valor exato e o nome do parceiro
                 nota_vinculada = ""
                 norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
                 for ent in cadastro_entradas:
-                    if abs(ent['Valor'] - tx['Valor']) <= 0.01:
+                    if abs(ent['Valor'] - tx['Valor']) <= 0.05:
                         norm_ent_nome = normalizar_para_match(ent['Fornecedor'])
                         if norm_tx_nome in norm_ent_nome or norm_ent_nome in norm_tx_nome:
                             nota_vinculada = ent['Nota']
@@ -269,13 +266,12 @@ with tab1:
             st.success("Conciliação Realizada com Sucesso!")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
-            # Exportador TXT estruturado estritamente em Tabulação
             output_txt = io.StringIO()
             for _, r in df_final.iterrows():
                 output_txt.write(f"{r['Data']}\t{r['Deb']}\t{r['Cred']}\t{r['Valor']}\t{r['Histórico']}\n")
                 
             st.download_button(
-                label="📄 Baixar Arquivo de Conciliação Final (.TXT)",
+                label="📥 Baixar Arquivo de Conciliação Final (.TXT)",
                 data=output_txt.getvalue().encode('utf-8'),
                 file_name=f"Importacao_Dominio_{datetime.now().strftime('%Y%m%d')}.txt",
                 mime="text/plain",
@@ -285,7 +281,7 @@ with tab1:
 # --- ABA 2 ---
 with tab2:
     st.markdown("### Gerar TXT de Planilha Prontamente Editada")
-    f_editado = st.file_uploader("📥 Enexe a planilha auditada (.xlsx)", type=["xlsx"], key="edit2")
+    f_editado = st.file_uploader("📥 Anexe a planilha auditada (.xlsx)", type=["xlsx"], key="edit2")
     if f_editado:
         df_audit = pd.read_excel(f_editado, dtype=str)
         cols = {str(c).upper().strip(): c for c in df_audit.columns}
@@ -306,7 +302,7 @@ with tab2:
                 if not val_f.startswith('R$'):
                     val_f = formatar_moeda_br(limpar_valor(val_f))
                 
-                txt_output_audit.write(f"{dt_f}\t{str(row[c_db]).split('.')[0] if c_db else ''}\t{str(row[c_cr]).split('.')[0] if c_cr else ''}\t{val_f}\t{str(row[c_hs]).upper().strip()}\n")
+                txt_output_audit.write(f"{dt_f}\t{str(row[c_db]).split('.')[0] if c_db and pd.notna(row[c_db]) else ''}\t{str(row[c_cr]).split('.')[0] if c_cr and pd.notna(row[c_cr]) else ''}\t{val_f}\t{str(row[c_hs]).upper().strip()}\n")
                 
             st.download_button(
                 label="📄 Baixar TXT da Planilha Auditada",
