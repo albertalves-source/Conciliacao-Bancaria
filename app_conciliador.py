@@ -234,14 +234,33 @@ def extrair_dados_extrato(file, termos_ignorar):
                                     transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
         
+    # CORREÇÃO: deduplicação por contagem, não por presença
+    # Lançamentos reais com mesma data/valor/favorecido (ex: 2 boletos de R$2.500 no mesmo dia)
+    # devem ser mantidos. Só removemos se o mesmo registro apareceu mais de uma vez
+    # por causa de bug de leitura de página (mesmo índice de página lido duas vezes).
+    # Estratégia: conta quantas vezes cada combinação aparece na lista bruta,
+    # depois monta a lista final respeitando essa contagem.
+    from collections import Counter
+    contagem_bruta = Counter((t['Data'], t['Total'], t['Fav'], t['Is_Credito']) for t in transacoes)
+
+    # Heurística: o PDF raramente tem mais de ~200 transações por página.
+    # Se uma combinação idêntica aparece mais de 3 vezes, é provável artefato de leitura;
+    # limitamos a no máximo 3 ocorrências para evitar explosão, mas na prática
+    # 2 lançamentos iguais no mesmo dia são perfeitamente válidos.
+    MAX_REPETICOES_PERMITIDAS = 3
+
     transacoes_dedup = []
-    vistos = set()
+    contagem_inserida: dict = {}
     for t in transacoes:
-        identificador = (t['Data'], t['Total'], t['Fav'], t['Is_Credito'])
-        if identificador not in vistos:
-            vistos.add(identificador)
+        chave = (t['Data'], t['Total'], t['Fav'], t['Is_Credito'])
+        inseridas = contagem_inserida.get(chave, 0)
+        total_brutas = contagem_bruta[chave]
+        # Permite repetir até o número real de ocorrências (cap em MAX_REPETICOES_PERMITIDAS)
+        limite = min(total_brutas, MAX_REPETICOES_PERMITIDAS)
+        if inseridas < limite:
             transacoes_dedup.append(t)
-            
+            contagem_inserida[chave] = inseridas + 1
+
     return transacoes_dedup
 
 def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
@@ -263,8 +282,10 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
             
         cod_deb = str(row.get('Deb', '')).strip()
         if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
-        # REGRA: Exclui apenas se tiver EXATAMENTE 3 dígitos numéricos
-        if len(cod_deb) == 3 and cod_deb.isdigit(): cod_deb = ""
+        # REGRA CORRIGIDA: NÃO apaga códigos de 3 dígitos do Débito.
+        # Contas contábeis legítimas como 536 têm 3 dígitos e devem ser preservadas.
+        # A remoção de código fiscal (3 dígitos) só faz sentido para o campo Crédito
+        # quando ele veio do relatório fiscal — não para débito de fornecedor/conta bancária.
         
         cod_cred = str(row.get('Cred', '')).strip()
         if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
@@ -518,11 +539,9 @@ with tab2:
                 for idx, row in df_editado.iterrows():
                     cod_deb = str(row.get('Deb', '')).strip()
                     if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
-                    
-                    # REGRA APLICADA: Deleta se tiver EXATAMENTE 3 dígitos (código fiscal)
-                    if len(cod_deb) == 3 and cod_deb.isdigit():
-                        cod_deb = ""
-                        df_editado.at[idx, 'Deb'] = ""
+
+                    # REGRA CORRIGIDA: não apaga débito de 3 dígitos.
+                    # Contas contábeis legítimas (ex: 536) têm 3 dígitos.
                     
                     # Se ficou vazio, tenta buscar no arquivo de fornecedores!
                     if cod_deb.lower() in ['', 'nan', 'none', '-']:
