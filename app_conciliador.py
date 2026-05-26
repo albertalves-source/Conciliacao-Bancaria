@@ -43,15 +43,13 @@ def converter_data(data_obj):
 def normalizar_para_match(texto):
     if not texto: return ""
     txt = str(texto).upper().strip()
-    # Remove acentos e caracteres especiais
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
     txt = re.sub(r'[^A-Z0-9]', '', txt)
-    # Remove sufixos empresariais para evitar erros de cruzamento
-    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]:
+    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]:
         txt = txt.replace(termo, "")
     return txt
 
-# --- EXTRATOR DE EXTRATOS CORRIGIDO E TESTADO NO SEU MODELO ---
+# --- EXTRATOR DE EXTRATOS ---
 def ler_extrato_dinamico(file):
     file.seek(0)
     if file.name.lower().endswith('.csv'):
@@ -97,7 +95,6 @@ def ler_extrato_dinamico(file):
             
             if not dt or v == 0: continue
             
-            # REMOÇÃO DE ACENTO NA VALIDAÇÃO DO CRÉDITO (Corrige o erro de virar tudo PAGTO)
             tipo_txt = str(r[col_tipo]).upper() if col_tipo and pd.notna(r[col_tipo]) else ""
             tipo_txt_norm = ''.join(c for c in unicodedata.normalize('NFD', tipo_txt) if unicodedata.category(c) != 'Mn')
             
@@ -188,7 +185,7 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas):
     if not norm_pesquisa: return ""
     
     if "PIXBET" in norm_pesquisa:
-        return "1121" # Conta padrão para transações internas da Pixbet
+        return "1121"
         
     if norm_pesquisa in mapa_contas:
         return mapa_contas[norm_pesquisa]
@@ -233,7 +230,6 @@ with tab1:
             codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas)
             
             if tx['Is_Credito']:
-                # Regra de Crédito Real (Recebimentos)
                 c_deb = cod_banco
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 
@@ -242,11 +238,9 @@ with tab1:
                 else:
                     hist_final = f"RECB {tx['Razao_Social']}"
             else:
-                # Regra de Débito Real (Pagamentos)
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco
                 
-                # BUSCA DA NOTA POR FORNECEDOR (Ignora a trava de centavos se o valor diferir por taxas)
                 nota_vinculada = ""
                 norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
                 
@@ -265,7 +259,6 @@ with tab1:
                 'Data': tx['Data'],
                 'Deb': c_deb,
                 'Cred': c_crd,
-                'Valor_Raw': tx['Valor'],
                 'Valor': formatar_moeda_br(tx['Valor']),
                 'Histórico': " ".join(hist_final.upper().split())
             })
@@ -273,24 +266,46 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Realizada com Sucesso!")
-            st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
+            st.success("Conciliação Pré-Processada com Sucesso!")
+            st.dataframe(df_final, use_container_width=True)
             
-            output_txt = io.StringIO()
-            for _, r in df_final.iterrows():
-                output_txt.write(f"{r['Data']}\t{r['Deb']}\t{r['Cred']}\t{r['Valor']}\t{r['Histórico']}\n")
+            st.markdown("---")
+            st.markdown("### 📥 Escolha como deseja exportar:")
+            
+            col_btn1, col_btn2 = st.columns(2)
+            
+            with col_btn1:
+                # NOVA FUNCIONALIDADE: Geração e Download em Excel (.xlsx) para ajuste humano
+                output_excel = io.BytesIO()
+                with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+                    df_final.to_excel(writer, index=False, sheet_name='Conciliacao_Analise')
                 
-            st.download_button(
-                label="📥 Baixar Arquivo de Conciliação Final (.TXT)",
-                data=output_txt.getvalue().encode('utf-8'),
-                file_name=f"Importacao_Dominio_{datetime.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
+                st.download_button(
+                    label="📥 1. Baixar Planilha para Ajustes (.XLSX)",
+                    data=output_excel.getvalue(),
+                    file_name=f"Analise_Humana_Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                
+            with col_btn2:
+                # Geração do Arquivo TXT delimitado por Tabulação direto
+                output_txt = io.StringIO()
+                for _, r in df_final.iterrows():
+                    output_txt.write(f"{r['Data']}\t{r['Deb']}\t{r['Cred']}\t{r['Valor']}\t{r['Histórico']}\n")
+                    
+                st.download_button(
+                    label="📄 2. Gerar Arquivo de Importação Direta (.TXT)",
+                    data=output_txt.getvalue().encode('utf-8'),
+                    file_name=f"Importacao_Dominio_Direto_{datetime.now().strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
 
 # --- ABA 2 ---
 with tab2:
-    st.markdown("### Gerar TXT de Planilha Prontamente Editada")
+    st.markdown("### Gerar TXT de Planilha Prontamente Editada / Auditada")
+    st.info("Suba aqui a planilha .xlsx que você baixou na Aba 1 e corrigiu manualmente.")
     f_editado = st.file_uploader("📥 Anexe a planilha auditada (.xlsx)", type=["xlsx"], key="edit2")
     if f_editado:
         df_audit = pd.read_excel(f_editado, dtype=str)
@@ -303,7 +318,7 @@ with tab2:
         c_hs = cols.get('HISTÓRICO') or cols.get('HISTORICO')
         
         if c_dt and c_vl and c_hs:
-            st.success("Planilha processada!")
+            st.success("Planilha processada e pronta para conversão contábil!")
             txt_output_audit = io.StringIO()
             
             for _, row in df_audit.iterrows():
@@ -315,7 +330,7 @@ with tab2:
                 txt_output_audit.write(f"{dt_f}\t{str(row[c_db]).split('.')[0] if c_db and pd.notna(row[c_db]) else ''}\t{str(row[c_cr]).split('.')[0] if c_cr and pd.notna(row[c_cr]) else ''}\t{val_f}\t{str(row[c_hs]).upper().strip()}\n")
                 
             st.download_button(
-                label="📄 Baixar TXT da Planilha Auditada",
+                label="📄 Baixar Arquivo Domínio Formatado (.TXT)",
                 data=txt_output_audit.getvalue().encode('utf-8'),
                 file_name=f"Importacao_Dominio_Editado_{datetime.now().strftime('%Y%m%d')}.txt",
                 mime="text/plain",
