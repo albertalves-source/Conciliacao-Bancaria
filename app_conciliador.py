@@ -49,6 +49,8 @@ def converter_data_dominio(data_obj):
 
 def normalizar_espacos(texto):
     if not isinstance(texto, str): return ""
+    # Remove caracteres de controle invisíveis do PDF que travam o Excel
+    texto = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', texto)
     return " ".join(texto.upper().split())
 
 def normalizar_para_match(texto):
@@ -60,7 +62,6 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# BLINDAGEM ANTI-CRASH DO EXCEL (IllegalCharacterError)
 def sanitize_dataframe_for_excel(df):
     illegal_chars = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
     for col in df.select_dtypes(include=['object']):
@@ -70,34 +71,27 @@ def sanitize_dataframe_for_excel(df):
 def limpar_historico_banco(texto, is_credito=False):
     t = str(texto).upper()
     
-    # 🧹 TRITURADOR DE LIXO BANCÁRIO (Remove sujeira dos extratos PIX do PDF)
-    t = re.sub(r'\bE\d{10,}[A-Z0-9]*\b', '', t) # IDs do PIX End-to-End (ex: E13935893202604...)
-    t = re.sub(r'\b\d{4}\s+\d{8,15}\s+\d{6,10}\b', '', t) # Agência/Conta (ex: 0001 419378260 13935893)
-    t = re.sub(r'\b[A-F0-9]{8}\b', '', t) # Códigos Hexadecimais longos (ex: 72DC7958)
-    t = re.sub(r'\b[A-F0-9]{4}\b', '', t) # Códigos Hexadecimais curtos (ex: 7C61)
-    t = re.sub(r'\b\d{2}/\d{2}/\d{1,4}\s*$', '', t) # Datas cortadas no final da linha (ex: 30/04/202)
-    t = re.sub(r'\s+[A-Z0-9]{2}\s*$', '', t) # Sujeira de 2 letras que sobram no final
+    # 1. Remove PIX IDs longos imediatamente para não atrapalhar
+    t = re.sub(r'\bE\d{14}[A-Z0-9]*\b', '', t)
     
-    t = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', t) 
+    # 2. ESTRATÉGIA DO SANDUÍCHE (Foco no layout Celcoin/ISPB/Delbank)
+    prefixos = r'(?:D[EÉ]BITO TRANSFERE|D[EÉ]BITO TRANFEREN|PIX ENVIADO|CR[EÉ]DITO PIX RECEBIDO|PIX RECEBIDO|CR[EÉ]DITO TRANSFERE|CR[EÉ]DITO DEVOLU[CÇ][AÃ]O|DESCONTO DE|TRANSFER[EÊ]NCIA INTERNA|PAGAMENTO DE BOLETO)'
+    sufixos = r'(?:CELCOIN IP|CELCOIN|BANCO ISPB|ISPB|DELBANK|C6 BANK|DOCK IP S\.A\.?|DOCK IP|BCO DO|BCO\b)'
     
-    termos = [
-        "PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE.", "PIX DE MESMA TITULARIDADE", 
-        "PIX DEVOLVIDO RECEBIDO", "TRANSFERENCIA INTERNA ENTRE CONTAS", 
-        "TRANSFERENCIA INTERNA", "TED RECEBIDA", "(PIXSENDSELF)", "RECEBIMENTO"
-    ]
-    for termo in termos: t = t.replace(termo, '')
+    match = re.search(rf'{prefixos}\s+(.*?)\s+{sufixos}', t)
+    if match:
+        # Se achou o padrão perfeito, isola SÓ o nome do fornecedor e ignora o resto da frase
+        t = match.group(1).strip()
+    else:
+        # Se for um formato diferente, tenta limpar de forma geral
+        t = re.sub(prefixos, '', t).strip()
+        t = re.sub(sufixos, '', t).strip()
+        t = re.sub(r'\b\d{4}\s+\d{8,15}\s+\d{6,10}\b', '', t) # Agências e contas em bloco
+        t = re.sub(r'\b[A-F0-9]{4,8}\b', '', t) # Hashes hexadecimais soltos (ex: 72DC7958)
+        t = re.sub(r'\b\d{2}/\d{2}/\d{2,4}.*', '', t) # Pedaços de data no final da linha
         
-    bancos = [
-        "BCO DO BRASIL S.A.", "CAIXA ECONOMICA FEDERAL", "BANCO INTER", 
-        "ITAÚ UNIBANCO S.A.", "BCO SANTANDER (BRASIL) S.A.", "BANCO BTG PACTUAL S.A.", 
-        "STONE IP S.A.", "BCO BRADESCO S.A.", "NU PAGAMENTOS - IP", "NU PAGAMENTOS IP", 
-        "BCO C6 S.A.", "DOCK IP S.A.", "ASAAS IP S.A.", "DELCRED SCD S.A.", "SICREDI RECIFE", 
-        "CCLA SUDOESTE GOIANO", "MERCADO PAGO IP LTDA.", "CCLA DA PARAÍBA - SICOOB PARAÍBA", 
-        "PAGSEGURO INTERNET IP S.A.", "FITS IP", "CORA SCFI", "ACG IP S.A."
-    ]
-    for banco in bancos: t = t.replace(banco, '')
-        
-    t = re.sub(r'(?:-\s*)?(?:R\$|RS)\s*\d*(?:\s*(?:R\$|RS))?', '', t, flags=re.IGNORECASE)
+    # 3. Limpezas finais padrão
+    t = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', t) # CPFs e CNPJs puros
     t = t.replace('-', ' ')
     t = re.sub(r'\s{2,}', ' ', t)
     t = normalizar_espacos(t).strip(' ,"-.')
@@ -115,9 +109,6 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
     nome_limpo = re.sub(r'^(PAGTO|RECB|PG\.)\s*', '', nome_limpo)
     nome_limpo = re.sub(r'^(A\s+)', '', nome_limpo)
     nome_limpo = re.sub(r'^(NF\s*\d+\s*)', '', nome_limpo)
-    nome_limpo = re.sub(r'\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b', '', nome_limpo) 
-    nome_limpo = re.sub(r'\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b', '', nome_limpo) 
-    nome_limpo = re.sub(r'\b\d{8}\b|\b\d{2}\.\d{3}\.\d{3}\b', '', nome_limpo) 
     
     nome_pesquisa_norm = normalizar_para_match(nome_limpo)
     if not nome_pesquisa_norm: return ""
@@ -197,7 +188,6 @@ def extrair_dados_extrato(file, termos_ignorar):
                             
                             valores_dinheiro = []
                             for v in sub_valores_raw:
-                                # Captura apenas o formato do dinheiro isolado para não roubar o PIX ID
                                 if re.search(r'-?\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}', v):
                                     valores_dinheiro.append(limpar_valor(v))
                                     
@@ -236,7 +226,7 @@ def extrair_dados_extrato(file, termos_ignorar):
                             if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
                             data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
                             
-                            # Captura isolada do valor
+                            # Filtro isolado: Extrai SÓ o padrão de dinheiro (ignora o ID do PIX)
                             valor_match = re.findall(r'-?\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}', linha)
                             
                             if data_match and valor_match:
@@ -483,7 +473,6 @@ with tab1:
         colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
         df_final = df_final[colunas_leiaute]
         
-        # Limpeza pesada anti-crash antes de gravar no Excel
         df_final = sanitize_dataframe_for_excel(df_final)
 
         df_display = df_final.copy()
@@ -569,6 +558,8 @@ with tab2:
                             df_editado.at[idx, 'Deb'] = novo_cod
 
             df_editado = df_editado[~df_editado['Histórico'].astype(str).str.upper().str.startswith("NF ")]
+            
+            df_editado = sanitize_dataframe_for_excel(df_editado)
 
             st.success("Planilha processada com sucesso! Pré-visualização (linhas prontas para o TXT):")
             st.dataframe(df_editado, use_container_width=True)
