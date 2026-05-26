@@ -10,7 +10,7 @@ from datetime import datetime
 st.set_page_config(page_title="Portal de Conciliação - Padrão Domínio", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
-# --- FUNÇÕES DE APOIO E LIMPEZA ---
+# --- FUNÇÕES DE APOIO ---
 def formatar_moeda_br(v):
     try:
         val = float(v)
@@ -49,8 +49,6 @@ def converter_data_dominio(data_obj):
 
 def normalizar_espacos(texto):
     if not isinstance(texto, str): return ""
-    # Remove caracteres de controle invisíveis do PDF que travam o Excel
-    texto = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', texto)
     return " ".join(texto.upper().split())
 
 def normalizar_para_match(texto):
@@ -62,36 +60,29 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-def sanitize_dataframe_for_excel(df):
-    illegal_chars = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
-    for col in df.select_dtypes(include=['object']):
-        df[col] = df[col].apply(lambda x: illegal_chars.sub('', str(x)) if pd.notna(x) else x)
-    return df
-
 def limpar_historico_banco(texto, is_credito=False):
     t = str(texto).upper()
+    t = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', t) 
+    t = re.sub(r'\b[A-Z0-9]{25,35}\b', '', t, flags=re.IGNORECASE)
     
-    # 1. Remove PIX IDs longos imediatamente para não atrapalhar
-    t = re.sub(r'\bE\d{14}[A-Z0-9]*\b', '', t)
-    
-    # 2. ESTRATÉGIA DO SANDUÍCHE (Foco no layout Celcoin/ISPB/Delbank)
-    prefixos = r'(?:D[EÉ]BITO TRANSFERE|D[EÉ]BITO TRANFEREN|PIX ENVIADO|CR[EÉ]DITO PIX RECEBIDO|PIX RECEBIDO|CR[EÉ]DITO TRANSFERE|CR[EÉ]DITO DEVOLU[CÇ][AÃ]O|DESCONTO DE|TRANSFER[EÊ]NCIA INTERNA|PAGAMENTO DE BOLETO)'
-    sufixos = r'(?:CELCOIN IP|CELCOIN|BANCO ISPB|ISPB|DELBANK|C6 BANK|DOCK IP S\.A\.?|DOCK IP|BCO DO|BCO\b)'
-    
-    match = re.search(rf'{prefixos}\s+(.*?)\s+{sufixos}', t)
-    if match:
-        # Se achou o padrão perfeito, isola SÓ o nome do fornecedor e ignora o resto da frase
-        t = match.group(1).strip()
-    else:
-        # Se for um formato diferente, tenta limpar de forma geral
-        t = re.sub(prefixos, '', t).strip()
-        t = re.sub(sufixos, '', t).strip()
-        t = re.sub(r'\b\d{4}\s+\d{8,15}\s+\d{6,10}\b', '', t) # Agências e contas em bloco
-        t = re.sub(r'\b[A-F0-9]{4,8}\b', '', t) # Hashes hexadecimais soltos (ex: 72DC7958)
-        t = re.sub(r'\b\d{2}/\d{2}/\d{2,4}.*', '', t) # Pedaços de data no final da linha
+    termos = [
+        "PAGAMENTO VIA PIX", "PAGAMENTO DE BOLETO", "PIX DE MESMA TITULARIDADE.", "PIX DE MESMA TITULARIDADE", 
+        "PIX DEVOLVIDO RECEBIDO", "TRANSFERENCIA INTERNA ENTRE CONTAS", 
+        "TRANSFERENCIA INTERNA", "TED RECEBIDA", "(PIXSENDSELF)", "RECEBIMENTO"
+    ]
+    for termo in termos: t = t.replace(termo, '')
         
-    # 3. Limpezas finais padrão
-    t = re.sub(r'\b\d{11}\b|\b\d{14}\b', '', t) # CPFs e CNPJs puros
+    bancos = [
+        "BCO DO BRASIL S.A.", "CAIXA ECONOMICA FEDERAL", "BANCO INTER", 
+        "ITAÚ UNIBANCO S.A.", "BCO SANTANDER (BRASIL) S.A.", "BANCO BTG PACTUAL S.A.", 
+        "STONE IP S.A.", "BCO BRADESCO S.A.", "NU PAGAMENTOS - IP", "NU PAGAMENTOS IP", 
+        "BCO C6 S.A.", "DOCK IP S.A.", "ASAAS IP S.A.", "DELCRED SCD S.A.", "SICREDI RECIFE", 
+        "CCLA SUDOESTE GOIANO", "MERCADO PAGO IP LTDA.", "CCLA DA PARAÍBA - SICOOB PARAÍBA", 
+        "PAGSEGURO INTERNET IP S.A.", "FITS IP", "CORA SCFI", "ACG IP S.A."
+    ]
+    for banco in bancos: t = t.replace(banco, '')
+        
+    t = re.sub(r'(?:-\s*)?(?:R\$|RS)\s*\d*(?:\s*(?:R\$|RS))?', '', t, flags=re.IGNORECASE)
     t = t.replace('-', ' ')
     t = re.sub(r'\s{2,}', ' ', t)
     t = normalizar_espacos(t).strip(' ,"-.')
@@ -109,6 +100,9 @@ def buscar_codigo_fornecedor(nome_pesquisa, dicionario_fornecedores):
     nome_limpo = re.sub(r'^(PAGTO|RECB|PG\.)\s*', '', nome_limpo)
     nome_limpo = re.sub(r'^(A\s+)', '', nome_limpo)
     nome_limpo = re.sub(r'^(NF\s*\d+\s*)', '', nome_limpo)
+    nome_limpo = re.sub(r'\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b', '', nome_limpo) 
+    nome_limpo = re.sub(r'\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b', '', nome_limpo) 
+    nome_limpo = re.sub(r'\b\d{8}\b|\b\d{2}\.\d{3}\.\d{3}\b', '', nome_limpo) 
     
     nome_pesquisa_norm = normalizar_para_match(nome_limpo)
     if not nome_pesquisa_norm: return ""
@@ -188,7 +182,7 @@ def extrair_dados_extrato(file, termos_ignorar):
                             
                             valores_dinheiro = []
                             for v in sub_valores_raw:
-                                if re.search(r'-?\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}', v):
+                                if re.search(r'[\d\s\.]+,\d{2}', v):
                                     valores_dinheiro.append(limpar_valor(v))
                                     
                             min_len = min(len(sub_datas), len(sub_descs))
@@ -225,10 +219,7 @@ def extrair_dados_extrato(file, termos_ignorar):
                             linha_upper = linha.upper()
                             if any(x in linha_upper for x in ["SALDO INICIAL", "SALDO FINAL", "TOTAL ACUMULADOR"]): continue
                             data_match = re.search(r'(\d{2}/\d{2}/\d{4})', linha)
-                            
-                            # Filtro isolado: Extrai SÓ o padrão de dinheiro (ignora o ID do PIX)
-                            valor_match = re.findall(r'-?\s*(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}', linha)
-                            
+                            valor_match = re.findall(r'-?[\d\s\.]*,\d{2}', linha)
                             if data_match and valor_match:
                                 is_debito = "-" in valor_match[0]
                                 is_credito = any(x in linha_upper for x in ["RECEBID", "DEVOLU", "ESTORNO", "CREDIT"])
@@ -243,20 +234,13 @@ def extrair_dados_extrato(file, termos_ignorar):
                                     transacoes.append({'Data': data_match.group(1), 'Total': val, 'Fav': desc_limpa, 'Is_Credito': is_credito})
         except Exception as e: st.error(f"Erro ao ler PDF: {e}")
         
-    from collections import Counter
-    contagem_bruta = Counter((t['Data'], t['Total'], t['Fav'], t['Is_Credito']) for t in transacoes)
-
-    MAX_REPETICOES_PERMITIDAS = 3
     transacoes_dedup = []
-    contagem_inserida = {}
+    vistos = set()
     for t in transacoes:
-        chave = (t['Data'], t['Total'], t['Fav'], t['Is_Credito'])
-        inseridas = contagem_inserida.get(chave, 0)
-        total_brutas = contagem_bruta[chave]
-        limite = min(total_brutas, MAX_REPETICOES_PERMITIDAS)
-        if inseridas < limite:
+        identificador = (t['Data'], t['Total'], t['Fav'], t['Is_Credito'])
+        if identificador not in vistos:
+            vistos.add(identificador)
             transacoes_dedup.append(t)
-            contagem_inserida[chave] = inseridas + 1
             
     return transacoes_dedup
 
@@ -279,15 +263,15 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
             
         cod_deb = str(row.get('Deb', '')).strip()
         if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
+        # REGRA: Exclui apenas se tiver EXATAMENTE 3 dígitos numéricos
+        if len(cod_deb) == 3 and cod_deb.isdigit(): cod_deb = ""
         
         cod_cred = str(row.get('Cred', '')).strip()
         if cod_cred.endswith('.0'): cod_cred = cod_cred[:-2]
+        if len(cod_cred) == 3 and cod_cred.isdigit(): cod_cred = ""
         
         if cod_deb.lower() in ['-', 'nan', 'none', '']: cod_deb = ""
         if cod_cred.lower() in ['-', 'nan', 'none', '']: cod_cred = ""
-        
-        if cod_deb == "" and cod_cred == "" and val_float == 0:
-            continue
         
         val_str = f"{val_float:.2f}".replace('.', ',')
         
@@ -309,7 +293,7 @@ def gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False):
         linha = f"{data_str};{cod_deb};{cod_cred};{val_str};;{hist_texto};;;;"
         linhas.append(linha)
         
-    return "\r\n".join(linhas)
+    return "\r\n".join(linhas) + "\r\n"
 
 # --- INTERFACE ---
 with st.sidebar:
@@ -472,8 +456,6 @@ with tab1:
         df_final = pd.DataFrame(matriz_saida)
         colunas_leiaute = ['Data', 'Deb', 'Cred', 'Saídas', 'Histórico']
         df_final = df_final[colunas_leiaute]
-        
-        df_final = sanitize_dataframe_for_excel(df_final)
 
         df_display = df_final.copy()
         df_display['Saídas'] = df_display['Saídas'].apply(formatar_moeda_br)
@@ -483,11 +465,11 @@ with tab1:
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             df_final.to_excel(writer, index=False, sheet_name='Conciliação')
             
-        txt_com_cabecalho = gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=True).encode('iso-8859-1', errors='replace')
-        txt_sem_cabecalho = gerar_txt_dominio_delimitado(df_final, incluir_cabecalho=False).encode('iso-8859-1', errors='replace')
+        txt_content = gerar_txt_dominio_delimitado(df_final, incluir_cabecalho)
+        txt_bytes = txt_content.encode('iso-8859-1', errors='replace')
         
         st.markdown("---")
-        c_btn1, c_btn2, c_btn3 = st.columns(3)
+        c_btn1, c_btn2 = st.columns(2)
         with c_btn1:
             st.download_button(
                 label="📥 Baixar Planilha (.XLSX)",
@@ -498,17 +480,9 @@ with tab1:
             )
         with c_btn2:
             st.download_button(
-                label="📄 Baixar TXT (SEM Cabeçalho)",
-                data=txt_sem_cabecalho,
-                file_name=f"Domínio_SEM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
-        with c_btn3:
-            st.download_button(
-                label="📄 Baixar TXT (COM Cabeçalho)",
-                data=txt_com_cabecalho,
-                file_name=f"Domínio_COM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
+                label="📄 Baixar Arquivo Domínio (.TXT)",
+                data=txt_bytes,
+                file_name=f"Importacao_Dominio_{datetime.now().strftime('%Y%m%d')}.txt",
                 mime="text/plain",
                 use_container_width=True
             )
@@ -545,10 +519,12 @@ with tab2:
                     cod_deb = str(row.get('Deb', '')).strip()
                     if cod_deb.endswith('.0'): cod_deb = cod_deb[:-2]
                     
+                    # REGRA APLICADA: Deleta se tiver EXATAMENTE 3 dígitos (código fiscal)
                     if len(cod_deb) == 3 and cod_deb.isdigit():
                         cod_deb = ""
                         df_editado.at[idx, 'Deb'] = ""
                     
+                    # Se ficou vazio, tenta buscar no arquivo de fornecedores!
                     if cod_deb.lower() in ['', 'nan', 'none', '-']:
                         hist = str(row.get('Histórico', ''))
                         nome_pesq = re.sub(r'^(PAGTO|RECB)\s*(NF\s*\d+\s*)?', '', hist).strip()
@@ -558,31 +534,19 @@ with tab2:
                             df_editado.at[idx, 'Deb'] = novo_cod
 
             df_editado = df_editado[~df_editado['Histórico'].astype(str).str.upper().str.startswith("NF ")]
-            
-            df_editado = sanitize_dataframe_for_excel(df_editado)
 
             st.success("Planilha processada com sucesso! Pré-visualização (linhas prontas para o TXT):")
             st.dataframe(df_editado, use_container_width=True)
             
-            txt_com_cabecalho_editado = gerar_txt_dominio_delimitado(df_editado, incluir_cabecalho=True).encode('iso-8859-1', errors='replace')
-            txt_sem_cabecalho_editado = gerar_txt_dominio_delimitado(df_editado, incluir_cabecalho=False).encode('iso-8859-1', errors='replace')
+            txt_content_editado = gerar_txt_dominio_delimitado(df_editado, incluir_cabecalho)
+            txt_bytes_editado = txt_content_editado.encode('iso-8859-1', errors='replace')
             
-            c_btn1_e, c_btn2_e = st.columns(2)
-            with c_btn1_e:
-                st.download_button(
-                    label="📄 Baixar TXT Editado (SEM Cabeçalho)",
-                    data=txt_sem_cabecalho_editado,
-                    file_name=f"Domínio_Editado_SEM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-            with c_btn2_e:
-                st.download_button(
-                    label="📄 Baixar TXT Editado (COM Cabeçalho)",
-                    data=txt_com_cabecalho_editado,
-                    file_name=f"Domínio_Editado_COM_Cabecalho_{datetime.now().strftime('%Y%m%d')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
+            st.download_button(
+                label="📄 Gerar Arquivo Domínio Editado (.TXT)",
+                data=txt_bytes_editado,
+                file_name=f"Importacao_Dominio_Editado_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
         except Exception as e:
             st.error(f"Erro ao ler a planilha: {e}")
