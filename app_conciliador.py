@@ -18,13 +18,11 @@ def formatar_moeda_br(v):
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
-    # Limpa espaços, símbolos de moeda e remove os sufixos "C" e "D" do padrão Sicoob
     v_str = str(v).upper().replace('R$', '').replace('$', '').replace(' ', '').replace(' ', '').strip()
-    v_str = v_str.replace('C', '').replace('D', '').strip()
+    v_str = v_str.replace('C', '').replace('D', '').replace('"', '').replace('«', '').replace('»', '').strip()
     
     if not v_str: return 0.0
     
-    # Trata formatação de milhar e decimal brasileira
     if '.' in v_str and ',' in v_str:
         v_str = v_str.replace('.', '').replace(',', '.')
     elif ',' in v_str:
@@ -44,7 +42,7 @@ def formatar_valor_dominio(v):
 
 def converter_data(data_obj):
     if pd.isna(data_obj): return None
-    s = str(data_obj).strip().split(' ')[0]
+    s = str(data_obj).strip().split(' ')[0].split('T')[0]
     for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y%m%d'):
         try: return datetime.strptime(s, fmt).date()
         except: pass
@@ -63,30 +61,28 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- MOTOR DETECTOR DE BANCOS CRONOLÓGICO ---
+# --- MOTOR DETECTOR DE BANCOS ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
-    # Vasculha até as primeiras 35 linhas para capturar cabeçalhos deslocados
-    for idx, row in df_bruto.head(35).iterrows():
+    for idx, row in df_bruto.head(30).iterrows():
         texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
     
     nome_arq_upper = nome_arquivo.upper()
     
     if "SICOOB" in texto_cabecalho or "SICOOB" in nome_arq_upper:
         return configuracao_bancos["SICOOB"]
-    elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in nome_arq_upper:
+    elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in nome_arq_upper or "PIXBET ABRIL DELF" in nome_arq_upper:
         return configuracao_bancos["DELBANK/DELFINANCE"]
     elif "CELCOIN" in texto_cabecalho or "CELCOIN" in nome_arq_upper:
         return configuracao_bancos["CELCOIN"]
             
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS INTELIGENTE ADAPTADO PARA SICOOB E DELBANK ---
+# --- EXTRATOR DE EXTRATOS ULTRA COMPATÍVEL (AGORA INCLUINDO DELBANK COMPLETO) ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo_bytes = file.read()
     
-    # Força a leitura adaptando-se a falhas de compressão do Excel/CSV
     try:
         df = pd.read_excel(io.BytesIO(conteudo_bytes), header=None, dtype=str)
     except:
@@ -99,12 +95,67 @@ def ler_extrato_dinamico(file, configuracao_bancos):
         
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     transacoes = []
-    idx_header = None
     
-    # Encontra a linha de cabeçalho correta analisando os sinônimos de colunas do Sicoob/Delbank
+    # TRATAMENTO EXCLUSIVO PARA O FORMATO DIFERENCIADO DO DELBANK (Sem cabeçalho padrão de colunas textuais)
+    if cod_banco_identificado == configuracao_bancos["DELBANK/DELFINANCE"]:
+        for idx, row in df.iterrows():
+            valores = [str(x).strip() for x in row.values if pd.notna(x)]
+            if not valores: continue
+            
+            # No Delbank a primeira coluna sempre começa com uma data contábil válida
+            dt = converter_data(valores[0])
+            if not dt: continue
+            
+            # Varre a linha para achar a coluna que descreve a transação e os valores
+            desc_banco = ""
+            valor_encontrado = 0.0
+            
+            for v in valores[1:]:
+                v_upper = v.upper()
+                if any(x in v_upper for x in ["PIX", "TED", "TRANSFERENCIA", "PAGAMENTO"]):
+                    desc_banco = v
+                    break
+            
+            # Captura o valor financeiro da linha (seja positivo ou negativo)
+            for v in valores[1:]:
+                if any(c in v for c in [',', '.']) and any(c.isdigit() for c in v):
+                    val_limpo = limpar_valor(v)
+                    if val_limpo > 0:
+                        valor_encontrado = val_limpo
+                        break
+            
+            if valor_encontrado == 0: continue
+            
+            # Extrai o nome da pessoa de dentro da frase do histórico (Ex: "PARA: JOAO" ou "PAGADOR: PIXBET")
+            nome_final = desc_banco
+            desc_banco_upper = desc_banco.upper()
+            if "PARA:" in desc_banco_upper:
+                nome_final = desc_banco.split("PARA:")[-1].strip()
+            elif "PAGADOR:" in desc_banco_upper:
+                nome_final = desc_banco.split("PAGADOR:")[-1].strip()
+                
+            # Determina se foi entrada (Crédito) ou saída (Débito) no Delbank
+            is_credito = "PAGADOR" in desc_banco_upper or "RECEBIDA" in desc_banco_upper
+            if "ENVIADO" in desc_banco_upper or "ENVIADA" in desc_banco_upper or "PAGAMENTO" in desc_banco_upper:
+                is_credito = False
+                
+            transacoes.append({
+                'Data': dt.strftime('%d/%m/%Y'),
+                'dt_obj': dt,
+                'Valor': valor_encontrado,
+                'Razao_Social': nome_final,
+                'Desc_Banco': desc_banco,
+                'Is_Credito': is_credito,
+                'Cod_Banco_Proprio': cod_banco_identificado,
+                'Nome_Arquivo_Origem': file.name
+            })
+        return transacoes
+
+    # FLUXO PADRÃO COM TRATAMENTO DE LINHA DE TÍTULOS (Para Celcoin e Sicoob)
+    idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if any(term in valores for term in ["DATA", "NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "QUANTIA", "DEB/CRED"]):
+        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "DEB/CRED"]):
             idx_header = i
             break
             
@@ -114,22 +165,20 @@ def ler_extrato_dinamico(file, configuracao_bancos):
         dados.columns = headers
         
         col_data = next((c for c in headers if "DATA" in c or "DT" in c), None)
-        col_tipo = next((c for c in headers if "TIPO" in c or "NATUREZA" in c or "DEB/CRED" in c or "OPERACAO" in c), None)
+        col_tipo = next((c for c in headers if "TIPO" in c or "NATUREZA" in c or "DEB/CRED" in c), None)
         col_desc_banco = next((c for c in headers if "DESCRI" in c or "HIST" in c), None)
-        col_contraparte = next((c for c in headers if "CONTRAPARTE" in c or "FAVORECIDO" in c or "NOME" in c or "PARCEIRO" in c), None)
+        col_contraparte = next((c for c in headers if "CONTRAPARTE" in c or "FAVORECIDO" in c or "NOME" in c), None)
         col_valor = next((c for c in headers if "VALOR" in c or "QUANTIA" in c or "VALOR (R$)" in c), None)
         
-        for idx_row, r in dados.iterrows():
+        for _, r in dados.iterrows():
             if pd.isna(r.get(col_data)) or pd.isna(r.get(col_valor)): continue
             
             dt = converter_data(r[col_data])
             v = limpar_valor(r[col_valor])
             if v == 0 or not dt: continue
             
-            # Captura a descrição textual principal da linha
             desc_banco = str(r[col_desc_banco]).strip() if col_desc_banco and pd.notna(r[col_desc_banco]) else ""
             
-            # Captura o nome da contraparte (ou extrai de strings longas do Delbank/Sicoob)
             nome_final = ""
             if col_contraparte and col_contraparte in r and pd.notna(r[col_contraparte]):
                 nome_final = str(r[col_contraparte]).strip()
@@ -137,7 +186,6 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             if not nome_final or nome_final == "" or nome_final.upper() == "NAN":
                 nome_final = desc_banco
                 
-            # Tratamento avançado para extrair o favorecido real quando vem escrito como: "PARA: FULANO" ou "PAGADOR: SICRANO"
             nome_final_upper = nome_final.upper()
             if "PARA:" in nome_final_upper:
                 nome_final = nome_final.split("PARA:")[-1].strip()
@@ -146,9 +194,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             elif "TRANSFERENCIA PROPRIETARIA" in nome_final_upper or "SALDO DO DIA" in nome_final_upper:
                 nome_final = "PIXBET"
                 
-            # Identificação inteligente do sinal de Crédito/Débito (Trata o "C" e "D" do Sicoob)
             texto_linha_completo = (str(r[col_valor]) + " " + (str(r[col_tipo]) if col_tipo else "")).upper()
-            
             is_credito = "CREDITO" in texto_linha_completo or "ENTRADA" in texto_linha_completo or " C" in texto_linha_completo or texto_linha_completo.endswith("C")
             if "DEBITO" in texto_linha_completo or "SAIDA" in texto_linha_completo or " D" in texto_linha_completo or texto_linha_completo.endswith("D") or "-" in str(r[col_valor]):
                 is_credito = False
@@ -165,7 +211,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             })
     return transacoes
 
-# --- CARREGADORES DO FISCAL ---
+# --- CARREGADORES DO FISCAL E CADASTRO ---
 def carregar_cadastro_contas(file):
     file.seek(0)
     conteudo = file.read()
@@ -262,7 +308,7 @@ tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TX
 with tab1:
     st.markdown("### Processar Arquivos Brutos")
     colA, colB, colC = st.columns(3)
-    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Selecione as planilhas que desejar juntos)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
+    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Suba quantos arquivos desejar juntos)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
     with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"], key="cont1")
     with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal (Obrigatório)", type=["xlsx","csv"], key="fisc1")
 
@@ -274,7 +320,7 @@ with tab1:
         for f in f_extratos:
             extrato_lista.extend(ler_extrato_dinamico(f, configuracao_bancos))
             
-        # INTERVENÇÃO HUMANA EM TELA
+        # INTERVENÇÃO HUMANA EM TELA SE O BANCO CONTINUAR DESCONHECIDO
         arquivos_misteriosos = set([tx['Nome_Arquivo_Origem'] for tx in extrato_lista if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio'])])
         
         bancos_resolvidos_na_tela = {}
@@ -333,7 +379,7 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Pré-Processada com Sucesso!")
+            st.success("Conciliação Pré-Processada com Sucesso! Os 3 bancos foram unificados.")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
