@@ -57,7 +57,7 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- MOTOR DETECTOR SIMPLIFICADO E BLINDADO PARA OS SEUS 3 BANCOS ---
+# --- MOTOR DETECTOR DE BANCOS E CONTAS CORRENTES ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
     for _, row in df_bruto.head(25).iterrows():
@@ -65,7 +65,6 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
     
     nome_arq_upper = nome_arquivo.upper()
     
-    # 1. Identificação Rígida por Palavra-Chave no Conteúdo ou no Nome do Arquivo
     if "SICOOB" in texto_cabecalho or "SICOOB" in nome_arq_upper:
         return configuracao_bancos["SICOOB"]
     elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in nome_arq_upper:
@@ -73,10 +72,9 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
     elif "CELCOIN" in texto_cabecalho or "CELCOIN" in nome_arq_upper:
         return configuracao_bancos["CELCOIN"]
             
-    # Se for um arquivo totalmente misterioso, solicita apontamento na tela
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS ---
+# --- EXTRATOR DE EXTRATOS INDIVIDUALIZADO POR BUFFER ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo = file.read()
@@ -89,7 +87,6 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     else:
         df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
     
-    # Atribui o código correto para este arquivo específico
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     
     transacoes = []
@@ -220,7 +217,7 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
                 return cod
     return ""
 
-# --- SIDEBAR ATUALIZADA EXCLUSIVAMENTE COM AS SUAS 3 CONTAS ---
+# --- SIDEBAR ATUALIZADA ---
 with st.sidebar:
     st.header("⚙️ Parametrização de Bancos e Contas")
     st.info("Informe os códigos reduzidos corretos da empresa atual:")
@@ -246,10 +243,12 @@ tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TX
 with tab1:
     st.markdown("### Processar Arquivos Brutos")
     colA, colB, colC = st.columns(3)
-    with colA: f_extratos = st.file_uploader("📂 Extrato Bancário", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
-    with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"], key="cont1")
-    with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas (Fiscal)", type=["xlsx","csv"], key="fisc1")
+    with colA: f_extratos = st.file_uploader("📂 Extrato Bancário (Envie quantos desejar)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
+    with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Obrigatório)", type=["xlsx","csv"], key="cont1")
+    with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal (Obrigatório)", type=["xlsx","csv"], key="fisc1")
 
+    # MUDANÇA: O sistema obriga o envio do cadastro de contas e do relatório fiscal de entradas.
+    # A caixinha de extratos fica livre para você mandar a quantidade que quiser (1, 2, 3 ou mais)!
     if f_extratos and f_contas and f_entradas:
         mapa_contas = carregar_cadastro_contas(f_contas)
         cadastro_entradas = carregar_fiscal_entradas(f_entradas)
@@ -294,6 +293,7 @@ with tab1:
                 
                 nota_vinculada = ""
                 norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
+                
                 for ent in cadastro_entradas:
                     norm_ent_nome = normalizar_para_match(ent['Fornecedor'])
                     if norm_tx_nome and (norm_tx_nome in norm_ent_nome or norm_ent_nome in norm_tx_nome):
@@ -370,6 +370,7 @@ with tab2:
             for _, row in df_audit.iterrows():
                 dt_f = str(row[c_dt]).strip().split(' ')[0]
                 val_limpo = formatar_valor_dominio(row[c_vl])
+                
                 deb_f = str(row[c_db]).split('.')[0].strip() if c_db and pd.notna(row[c_db]) else ''
                 cred_f = str(row[c_cr]).split('.')[0].strip() if c_cr and pd.notna(row[c_cr]) else ''
                 hist_f = str(row[c_hs]).upper().strip()
