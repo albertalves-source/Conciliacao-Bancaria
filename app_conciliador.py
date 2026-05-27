@@ -57,24 +57,30 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- MOTOR DETECTOR DE BANCOS E CONTAS CORRENTES ---
+# --- MOTOR DETECTOR CORRIGIDO: INDIVIDUALIZAÇÃO REAL DOS 3 BANCOS ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
-    for _, row in df_bruto.head(25).iterrows():
+    for _, row in df_bruto.head(30).iterrows():
         texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
     
     nome_arq_upper = nome_arquivo.upper()
     
+    # 1. Checa se é SICOOB (no conteúdo ou no nome do arquivo) -> Retorna 2093
     if "SICOOB" in texto_cabecalho or "SICOOB" in nome_arq_upper:
         return configuracao_bancos["SICOOB"]
-    elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in nome_arq_upper:
+        
+    # 2. Checa se é DELBANK/DELFINANCE -> Retorna 1110
+    elif any(x in texto_cabecalho for x in ["DELBANK", "DELFINANCE", "DEL FINANCE"]) or any(x in nome_arq_upper for x in ["DELBANK", "DELFINANCE", "DELF"]):
         return configuracao_bancos["DELBANK/DELFINANCE"]
+        
+    # 3. Checa se é CELCOIN -> Retorna 1868
     elif "CELCOIN" in texto_cabecalho or "CELCOIN" in nome_arq_upper:
         return configuracao_bancos["CELCOIN"]
             
+    # Se falhar totalmente no mapeamento automático, aciona a ajuda na tela
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS INDIVIDUALIZADO POR BUFFER ---
+# --- EXTRATOR DE EXTRATOS TRATADO ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo = file.read()
@@ -87,6 +93,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     else:
         df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
     
+    # Identifica o banco de forma isolada para este arquivo
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     
     transacoes = []
@@ -94,7 +101,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR"]):
+        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "DOCUMENTO"]):
             idx_header = i
             break
             
@@ -217,14 +224,14 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
                 return cod
     return ""
 
-# --- SIDEBAR ATUALIZADA ---
+# --- SIDEBAR PARAMETRIZADA COM OS 3 CÓDIGOS CORRETOS ---
 with st.sidebar:
     st.header("⚙️ Parametrização de Bancos e Contas")
-    st.info("Informe os códigos reduzidos corretos da empresa atual:")
+    st.info("Informe os códigos reduzidos corretos das 3 contas da empresa:")
     
-    txt_celcoin = st.text_input("Código para CELCOIN (Geral):", value="1868")
-    txt_sicoob = st.text_input("Código para SICOOB:", value="2093")
-    txt_delbank = st.text_input("Código para DELBANK / DELFINANCE:", value="1110")
+    txt_celcoin = st.text_input("Código CELCOIN:", value="1868")
+    txt_sicoob = st.text_input("Código SICOOB:", value="2093")
+    txt_delbank = st.text_input("Código DELBANK / DELFINANCE:", value="1110")
     
     st.divider()
     conta_padrao_receita = st.text_input("Conta de Contraparte Interna (Pix/Aportes):", value="1121")
@@ -243,12 +250,10 @@ tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TX
 with tab1:
     st.markdown("### Processar Arquivos Brutos")
     colA, colB, colC = st.columns(3)
-    with colA: f_extratos = st.file_uploader("📂 Extrato Bancário (Envie quantos desejar)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
-    with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Obrigatório)", type=["xlsx","csv"], key="cont1")
+    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Selecione de 1 a 3 extratos livremente)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
+    with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"], key="cont1")
     with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal (Obrigatório)", type=["xlsx","csv"], key="fisc1")
 
-    # MUDANÇA: O sistema obriga o envio do cadastro de contas e do relatório fiscal de entradas.
-    # A caixinha de extratos fica livre para você mandar a quantidade que quiser (1, 2, 3 ou mais)!
     if f_extratos and f_contas and f_entradas:
         mapa_contas = carregar_cadastro_contas(f_contas)
         cadastro_entradas = carregar_fiscal_entradas(f_entradas)
@@ -273,6 +278,7 @@ with tab1:
         
         matriz_conciliada = []
         for tx in extrato_lista:
+            # Injeta isoladamente o banco correto descoberto para este arquivo específico
             if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio']):
                 cod_banco_atual = bancos_resolvidos_na_tela.get(tx['Nome_Arquivo_Origem'], "CONTA_MANUAL")
             else:
@@ -293,7 +299,6 @@ with tab1:
                 
                 nota_vinculada = ""
                 norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
-                
                 for ent in cadastro_entradas:
                     norm_ent_nome = normalizar_para_match(ent['Fornecedor'])
                     if norm_tx_nome and (norm_tx_nome in norm_ent_nome or norm_ent_nome in norm_tx_nome):
@@ -317,7 +322,7 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Pré-Processada com Sucesso!")
+            st.success("Conciliação Pré-Processada com Sucesso! Todos os extratos anexados foram individualizados.")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
