@@ -57,16 +57,15 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- NOVO MOTOR DETECTOR DE BANCOS E CONTAS CORRENTES DE FORMA CIRÚRGICA ---
+# --- MOTOR DETECTOR DE BANCOS E CONTAS CORRENTES ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
-    for _, row in df_bruto.head(15).iterrows():
+    for _, row in df_bruto.head(25).iterrows():
         texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
     
     # 1. Busca primeiro por números exatos de contas correntes informados na Sidebar
     for chave_config, codigo_contabil in configuracao_bancos.items():
         if codigo_contabil != "":
-            # Procura se o número da conta (ex: 416929008) está no cabeçalho
             numeros_conta = re.findall(r'\b\d{5,12}\b', chave_config)
             for num in numeros_conta:
                 if num in texto_cabecalho:
@@ -78,7 +77,6 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
     elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho:
         return configuracao_bancos["DELBANK/DELFINANCE"]
     elif "CELCOIN" in texto_cabecalho:
-        # Se achou Celcoin genérico mas não casou conta, tenta associar à primeira Celcoin disponível
         return configuracao_bancos.get("CELCOIN 416929172", configuracao_bancos.get("CELCOIN 416929008"))
             
     # Fallback pelo nome do arquivo físico
@@ -108,7 +106,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO"]):
+        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "LAVOURA"]):
             idx_header = i
             break
             
@@ -236,7 +234,6 @@ with st.sidebar:
     st.header("⚙️ Parametrização de Bancos e Contas")
     st.info("Informe os códigos reduzidos para cada conta corrente específica:")
     
-    # Separação exata por número de conta corrente da Celcoin para não haver sobreposição
     txt_celcoin_172 = st.text_input("Conta CELCOIN (416929172):", value="1857")
     txt_celcoin_008 = st.text_input("Conta CELCOIN (416929008):", value="1868")
     txt_sicoob = st.text_input("Código Geral SICOOB:", value="2093")
@@ -258,6 +255,8 @@ with st.sidebar:
     }
     if nome_banco_novo and txt_banco_novo:
         configuracao_bancos[nome_banco_novo] = txt_banco_novo.strip()
+
+st.title("🏦 Portal de Conciliação Multi-Banco Avançado")
 
 tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TXT de Planilha Auditada"])
 
@@ -336,7 +335,9 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Pré-Processada com Sucesso!")
+            st.success("Conciliação Pré-Processada com Sucesso! Foram encontradas e unificadas transações de todos os extratos anexados.")
+            
+            # Garante a exibição correta e o ordenamento unificado por data
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
@@ -371,6 +372,7 @@ with tab1:
 # --- ABA 2 ---
 with tab2:
     st.markdown("### Gerar TXT de Planilha Prontamente Editada / Auditada")
+    st.info("Suba aqui a planilha .xlsx que você baixou na Aba 1 e corrigiu manualmente.")
     f_editado = st.file_uploader("📥 Anexe a planilha auditada (.xlsx)", type=["xlsx"], key="edit2")
     if f_editado:
         df_audit = pd.read_excel(f_editado, dtype=str)
