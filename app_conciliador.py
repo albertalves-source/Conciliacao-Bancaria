@@ -57,14 +57,31 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- EXTRATOR DE EXTRATOS ---
-def ler_extrato_dinamico(file):
+# --- NOVO MOTOR DETECTOR DE BANCOS DINÂMICO ---
+def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
+    texto_cabecalho = ""
+    for _, row in df_bruto.head(15).iterrows():
+        texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+    
+    # Varre as chaves do dicionário configurado na interface (Celcoin, Sicoob, Delbank e o Novo)
+    for nome_banco, codigo_banco in configuracao_bancos.items():
+        if nome_banco != "" and codigo_banco != "" and nome_banco in texto_cabecalho:
+            return codigo_banco
+            
+    # Se for um arquivo sem identificação clara, repassa uma tag de solicitação humana
+    return f"PEDIR_AJUDA_DE_{nome_arquivo}"
+
+# --- EXTRATOR DE EXTRATOS (Atualizado para receber as configurações de Bancos) ---
+def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     if file.name.lower().endswith('.csv'):
         try: df = pd.read_csv(file, header=None, dtype=str, sep=None, engine='python')
         except: df = pd.read_csv(file, header=None, dtype=str)
     else:
         df = pd.read_excel(file, header=None, dtype=str)
+    
+    # Executa a varredura dinâmica de banco
+    cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     
     transacoes = []
     idx_header = None
@@ -116,7 +133,9 @@ def ler_extrato_dinamico(file):
                 'Valor': v,
                 'Razao_Social': nome_final,
                 'Desc_Banco': desc_banco,
-                'Is_Credito': is_credito
+                'Is_Credito': is_credito,
+                'Cod_Banco_Proprio': cod_banco_identificado,
+                'Nome_Arquivo_Origem': file.name
             })
     return transacoes
 
@@ -188,12 +207,13 @@ def carregar_fiscal_entradas(file):
                 })
     return entradas
 
-def buscar_codigo_conta(nome_pesquisa, mapa_contas):
+def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return ""
     
-    if "PIXBET" in norm_pesquisa:
-        return "1121"
+    # Validação dinâmica inteligente se for movimentação interna de qualquer BET
+    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
+        return conta_fallback_receita
         
     if norm_pesquisa in mapa_contas:
         return mapa_contas[norm_pesquisa]
@@ -208,11 +228,31 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas):
                 return cod
     return ""
 
-# --- INTERFACE STREAMLIT ---
+# --- INTERFACE STREAMLIT MODIFICADA PARA SUPORTAR CADASTRO DINÂMICO ---
 with st.sidebar:
-    st.header("⚙️ Parâmetros Contábeis")
-    cod_banco = st.text_input("Código da Conta Bancária (Empresa):", value="2139")
-    conta_padrao_receita = st.text_input("Conta de Recebimento Padrão:", value="1121")
+    st.header("⚙️ Parametrização de Bancos da Empresa")
+    st.info("Preencha os códigos reduzidos corretos da empresa atual:")
+    
+    txt_celcoin = st.text_input("Código para CELCOIN:", value="1868")
+    txt_sicoob = st.text_input("Código para SICOOB:", value="2093")
+    txt_delbank = st.text_input("Código para DELBANK / DELFINANCE:", value="1110")
+    
+    st.divider()
+    st.markdown("### ➕ Adicionar Novo Banco Manual")
+    nome_banco_novo = st.text_input("Nome do Banco Novo (Ex: INTER, ITAU, BRADESCO):", value="").upper().strip()
+    txt_banco_novo = st.text_input("Código Contábil do Banco Novo:", value="")
+    
+    st.divider()
+    conta_padrao_receita = st.text_input("Conta de Contraparte Interna:", value="1121")
+
+    # Estruturação dinâmica das caixas
+    configuracao_bancos = {
+        "CELCOIN": txt_celcoin.strip(),
+        "SICOOB": txt_sicoob.strip(),
+        "DELBANK/DELFINANCE": txt_delbank.strip()
+    }
+    if nome_banco_novo and txt_banco_novo:
+        configuracao_bancos[nome_banco_novo] = txt_banco_novo.strip()
 
 tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TXT de Planilha Auditada"])
 
@@ -221,7 +261,7 @@ with tab1:
     st.markdown("### Processar Arquivos Brutos")
     colA, colB, colC = st.columns(3)
     with colA: f_extratos = st.file_uploader("📂 Extrato Bancário", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
-    with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (FLABET)", type=["xlsx","csv"], key="cont1")
+    with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"], key="cont1")
     with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas (Fiscal)", type=["xlsx","csv"], key="fisc1")
 
     if f_extratos and f_contas and f_entradas:
@@ -230,24 +270,44 @@ with tab1:
         
         extrato_lista = []
         for f in f_extratos:
-            extrato_lista.extend(ler_extrato_dinamico(f))
+            extrato_lista.extend(ler_extrato_dinamico(f, configuracao_bancos))
             
+        # INTERVENÇÃO HUMANA BLINDADA: Se houver extrato sem identificação padrão, solicita o apontamento na tela
+        arquivos_misteriosos = set([tx['Nome_Arquivo_Origem'] for tx in extrato_lista if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio'])])
+        
+        bancos_resolvidos_na_tela = {}
+        if arquivos_misteriosos:
+            st.warning("⚠️ Não consegui mapear o banco de alguns extratos automaticamente. Selecione abaixo a qual banco eles pertencem:")
+            for arq in arquivos_misteriosos:
+                escolha = st.selectbox(
+                    f"O arquivo contido em '{arq}' refere-se a qual banco configurado?",
+                    options=list(configuracao_bancos.keys()),
+                    key=f"select_ajuda_{arq}"
+                )
+                bancos_resolvidos_na_tela[arq] = configuracao_bancos[escolha]
+        
         matriz_conciliada = []
         
         for tx in extrato_lista:
-            codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas)
+            # Resgata o código contábil automático ou o selecionado na tela pelo usuário
+            if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio']):
+                cod_banco_atual = bancos_resolvidos_na_tela.get(tx['Nome_Arquivo_Origem'], "CONTA_MANUAL")
+            else:
+                cod_banco_atual = tx['Cod_Banco_Proprio']
+                
+            codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
             if tx['Is_Credito']:
-                c_deb = cod_banco
+                c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 
-                if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or "PIXBET" in tx['Razao_Social'].upper():
+                if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or any(x in tx['Razao_Social'].upper() for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
                     hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
                     hist_final = f"RECB {tx['Razao_Social']}"
             else:
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
-                c_crd = cod_banco
+                c_crd = cod_banco_atual
                 
                 nota_vinculada = ""
                 norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
@@ -267,7 +327,7 @@ with tab1:
                 'Data': tx['Data'],
                 'Deb': c_deb,
                 'Cred': c_crd,
-                'Valor_Original': tx['Valor'], # Guardado float puro para o Excel e o TXT
+                'Valor_Original': tx['Valor'],
                 'Valor': formatar_moeda_br(tx['Valor']),
                 'Histórico': " ".join(hist_final.upper().split())
             })
@@ -277,7 +337,6 @@ with tab1:
         if not df_final.empty:
             st.success("Conciliação Pré-Processada com Sucesso!")
             
-            # Exibe na tela com formatação visual humana (R$)
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
@@ -286,7 +345,6 @@ with tab1:
             col_btn1, col_btn2 = st.columns(2)
             
             with col_btn1:
-                # Geração da planilha Excel amigável para Auditoria Humana
                 output_excel = io.BytesIO()
                 df_excel = df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']].copy()
                 with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
@@ -301,7 +359,6 @@ with tab1:
                 )
                 
             with col_btn2:
-                # CORREÇÃO DO LAYOUT DOMÍNIO: Exportação estrita usando ";" e "Valor limpo" + ";;;;" no final
                 output_txt = io.StringIO()
                 for _, r in df_final.iterrows():
                     val_dominio = formatar_valor_dominio(r['Valor_Original'])
@@ -342,11 +399,9 @@ with tab2:
                 cred_f = str(row[c_cr]).split('.')[0].strip() if c_cr and pd.notna(row[c_cr]) else ''
                 hist_f = str(row[c_hs]).upper().strip()
                 
-                # Garante que as palavras de marcação estragadas não fiquem salvas
-                if deb_f == "NAN" or deb_f == "CONTA_MANUAL": deb_f = ""
-                if cred_f == "NAN" or cred_f == "CONTA_MANUAL": cred_f = ""
+                if deb_f in ["NAN", "CONTA_MANUAL"]: deb_f = ""
+                if cred_f in ["NAN", "CONTA_MANUAL"]: cred_f = ""
                 
-                # CORREÇÃO DO LAYOUT DOMÍNIO (Igual ao seu exemplo com os quatro ";" ao fim)
                 txt_output_audit.write(f"{dt_f};{deb_f};{cred_f};{val_limpo};;{hist_f};;;;\n")
                 
             st.download_button(
