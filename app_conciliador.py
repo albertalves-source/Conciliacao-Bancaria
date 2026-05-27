@@ -57,7 +57,7 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- MELHORIA: MOTOR DETECTOR DE BANCOS DINÂMICO ---
+# --- MOTOR DETECTOR DE BANCOS DINÂMICO ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
     for _, row in df_bruto.head(15).iterrows():
@@ -71,7 +71,7 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
     # Caso não encontre por texto, joga uma tag para solicitar escolha humana em tela
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS (Adicionado parâmetro configuracao_bancos) ---
+# --- EXTRATOR DE EXTRATOS ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     if file.name.lower().endswith('.csv'):
@@ -211,7 +211,6 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return ""
     
-    # Validação dinâmica inteligente se for movimentação interna de qualquer BET
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita
         
@@ -228,7 +227,7 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
                 return cod
     return ""
 
-# --- MELHORIA: SIDEBAR MODIFICADA PARA SUPORTAR MULTI-BANCO E NOVOS BANCOS ---
+# --- SIDEBAR DINÂMICA COMPLETA ---
 with st.sidebar:
     st.header("⚙️ Parametrização de Bancos da Empresa")
     st.info("Preencha os códigos reduzidos corretos da empresa/banca atual:")
@@ -245,7 +244,6 @@ with st.sidebar:
     st.divider()
     conta_padrao_receita = st.text_input("Conta de Contraparte Interna (Pix/Aportes):", value="1121")
 
-    # Alimentação estruturada do dicionário dinâmico
     configuracao_bancos = {
         "CELCOIN": txt_celcoin.strip(),
         "SICOOB": txt_sicoob.strip(),
@@ -270,10 +268,9 @@ with tab1:
         
         extrato_lista = []
         for f in f_extratos:
-            # Correção essencial: Agora passa a configuração dos bancos para a leitura individualizada
             extrato_lista.extend(ler_extrato_dinamico(f, configuracao_bancos))
             
-        # MELHORIA: INTERVENÇÃO HUMANA EM TELA SE O BANCO FOR NOVO OU DESCONHECIDO
+        # INTERVENÇÃO HUMANA EM TELA SE O BANCO FOR NOVO OU DESCONHECIDO
         arquivos_misteriosos = set([tx['Nome_Arquivo_Origem'] for tx in extrato_lista if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio'])])
         
         bancos_resolvidos_na_tela = {}
@@ -290,7 +287,7 @@ with tab1:
         matriz_conciliada = []
         
         for tx in extrato_lista:
-            # MELHORIA: Resgata o código contábil correto obtido por linha e arquivo de origem
+            # FIX BLINDADO: Resgata o código contábil correto obtido por linha e arquivo de origem de forma isolada
             if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio']):
                 cod_banco_atual = bancos_resolvidos_na_tela.get(tx['Nome_Arquivo_Origem'], "CONTA_MANUAL")
             else:
@@ -299,7 +296,6 @@ with tab1:
             codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
             if tx['Is_Credito']:
-                # Correção estrutural: Substituição do cod_banco fixo pelo cod_banco_atual dinâmico
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 
@@ -308,7 +304,6 @@ with tab1:
                 else:
                     hist_final = f"RECB {tx['Razao_Social']}"
             else:
-                # Correção estrutural: Substituição do cod_banco fixo pelo cod_banco_atual dinâmico
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco_atual
                 
@@ -339,12 +334,10 @@ with tab1:
         
         if not df_final.empty:
             st.success("Conciliação Pré-Processada com Sucesso!")
-            
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
             st.markdown("### 📥 Escolha como deseja exportar:")
-            
             col_btn1, col_btn2 = st.columns(2)
             
             with col_btn1:
