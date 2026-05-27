@@ -28,6 +28,14 @@ def limpar_valor(v):
     except: 
         return 0.0
 
+def formatar_valor_dominio(v):
+    """Formata o valor estritamente para o TXT do Domínio: sem pontos de milhar e com vírgula decimal (Ex: 1300000,00)"""
+    try:
+        val = limpar_valor(v)
+        return f"{val:.2f}".replace('.', ',')
+    except:
+        return "0,00"
+
 def converter_data(data_obj):
     if pd.isna(data_obj): return None
     s = str(data_obj).strip().split(' ')[0]
@@ -259,6 +267,7 @@ with tab1:
                 'Data': tx['Data'],
                 'Deb': c_deb,
                 'Cred': c_crd,
+                'Valor_Original': tx['Valor'], # Guardado float puro para o Excel e o TXT
                 'Valor': formatar_moeda_br(tx['Valor']),
                 'Histórico': " ".join(hist_final.upper().split())
             })
@@ -267,7 +276,9 @@ with tab1:
         
         if not df_final.empty:
             st.success("Conciliação Pré-Processada com Sucesso!")
-            st.dataframe(df_final, use_container_width=True)
+            
+            # Exibe na tela com formatação visual humana (R$)
+            st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
             st.markdown("### 📥 Escolha como deseja exportar:")
@@ -275,10 +286,11 @@ with tab1:
             col_btn1, col_btn2 = st.columns(2)
             
             with col_btn1:
-                # NOVA FUNCIONALIDADE: Geração e Download em Excel (.xlsx) para ajuste humano
+                # Geração da planilha Excel amigável para Auditoria Humana
                 output_excel = io.BytesIO()
+                df_excel = df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']].copy()
                 with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-                    df_final.to_excel(writer, index=False, sheet_name='Conciliacao_Analise')
+                    df_excel.to_excel(writer, index=False, sheet_name='Conciliacao_Analise')
                 
                 st.download_button(
                     label="📥 1. Baixar Planilha para Ajustes (.XLSX)",
@@ -289,10 +301,11 @@ with tab1:
                 )
                 
             with col_btn2:
-                # Geração do Arquivo TXT delimitado por Tabulação direto
+                # CORREÇÃO DO LAYOUT DOMÍNIO: Exportação estrita usando ";" e "Valor limpo" + ";;;;" no final
                 output_txt = io.StringIO()
                 for _, r in df_final.iterrows():
-                    output_txt.write(f"{r['Data']}\t{r['Deb']}\t{r['Cred']}\t{r['Valor']}\t{r['Histórico']}\n")
+                    val_dominio = formatar_valor_dominio(r['Valor_Original'])
+                    output_txt.write(f"{r['Data']};{r['Deb']};{r['Cred']};{val_dominio};;{r['Histórico']};;;;\n")
                     
                 st.download_button(
                     label="📄 2. Gerar Arquivo de Importação Direta (.TXT)",
@@ -323,11 +336,18 @@ with tab2:
             
             for _, row in df_audit.iterrows():
                 dt_f = str(row[c_dt]).strip().split(' ')[0]
-                val_f = str(row[c_vl]).strip()
-                if not val_f.startswith('R$'):
-                    val_f = formatar_moeda_br(limpar_valor(val_f))
+                val_limpo = formatar_valor_dominio(row[c_vl])
                 
-                txt_output_audit.write(f"{dt_f}\t{str(row[c_db]).split('.')[0] if c_db and pd.notna(row[c_db]) else ''}\t{str(row[c_cr]).split('.')[0] if c_cr and pd.notna(row[c_cr]) else ''}\t{val_f}\t{str(row[c_hs]).upper().strip()}\n")
+                deb_f = str(row[c_db]).split('.')[0].strip() if c_db and pd.notna(row[c_db]) else ''
+                cred_f = str(row[c_cr]).split('.')[0].strip() if c_cr and pd.notna(row[c_cr]) else ''
+                hist_f = str(row[c_hs]).upper().strip()
+                
+                # Garante que as palavras de marcação estragadas não fiquem salvas
+                if deb_f == "NAN" or deb_f == "CONTA_MANUAL": deb_f = ""
+                if cred_f == "NAN" or cred_f == "CONTA_MANUAL": cred_f = ""
+                
+                # CORREÇÃO DO LAYOUT DOMÍNIO (Igual ao seu exemplo com os quatro ";" ao fim)
+                txt_output_audit.write(f"{dt_f};{deb_f};{cred_f};{val_limpo};;{hist_f};;;;\n")
                 
             st.download_button(
                 label="📄 Baixar Arquivo Domínio Formatado (.TXT)",
