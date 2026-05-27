@@ -18,11 +18,18 @@ def formatar_moeda_br(v):
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
-    v_str = str(v).replace('R$', '').replace('$', '').replace(' ', '').strip()
+    # Limpa espaços, símbolos de moeda e remove os sufixos "C" e "D" do padrão Sicoob
+    v_str = str(v).upper().replace('R$', '').replace('$', '').replace(' ', '').replace(' ', '').strip()
+    v_str = v_str.replace('C', '').replace('D', '').strip()
+    
+    if not v_str: return 0.0
+    
+    # Trata formatação de milhar e decimal brasileira
     if '.' in v_str and ',' in v_str:
         v_str = v_str.replace('.', '').replace(',', '.')
     elif ',' in v_str:
         v_str = v_str.replace(',', '.')
+        
     try: 
         return abs(float(v_str))
     except: 
@@ -56,10 +63,11 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- MOTOR DETECTOR DE BANCOS ---
+# --- MOTOR DETECTOR DE BANCOS CRONOLÓGICO ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
-    for idx, row in df_bruto.head(30).iterrows():
+    # Vasculha até as primeiras 35 linhas para capturar cabeçalhos deslocados
+    for idx, row in df_bruto.head(35).iterrows():
         texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
     
     nome_arq_upper = nome_arquivo.upper()
@@ -73,51 +81,30 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
             
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- NOVO LEITOR DE CONTEÚDO UNIFICADO (Tenta Excel e força CSV se der erro) ---
-def forcar_leitura_dataframe(file):
+# --- EXTRATOR DE EXTRATOS INTELIGENTE ADAPTADO PARA SICOOB E DELBANK ---
+def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo_bytes = file.read()
     
-    # 1. Primeira tentativa: Tenta ler como Excel (.xlsx) puro
+    # Força a leitura adaptando-se a falhas de compressão do Excel/CSV
     try:
         df = pd.read_excel(io.BytesIO(conteudo_bytes), header=None, dtype=str)
-        if not df.empty and df.shape[1] > 2:
-            return df
     except:
-        pass
-
-    # 2. Segunda tentativa: Força como CSV em UTF-8
-    try:
-        df = pd.read_csv(io.StringIO(conteudo_bytes.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
-        if not df.empty: return df
-    except:
-        pass
-        
-    # 3. Terceira tentativa: Força como CSV em ISO-8859-1 (Padrão de exportações antigas de banco)
-    try:
-        df = pd.read_csv(io.StringIO(conteudo_bytes.decode('iso-8859-1')), header=None, dtype=str, sep=None, engine='python')
-        if not df.empty: return df
-    except:
-        pass
-        
-    # Fallback final se o arquivo estiver muito corrompido
-    return pd.DataFrame()
-
-# --- EXTRATOR DE EXTRATOS ---
-def ler_extrato_dinamico(file, configuracao_bancos):
-    df = forcar_leitura_dataframe(file)
-    
-    if df.empty:
-        st.error(f"Não foi possível ler o arquivo: {file.name}. Verifique se ele não está corrompido.")
-        return []
+        try:
+            df = pd.read_csv(io.StringIO(conteudo_bytes.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
+        except:
+            df = pd.read_csv(io.StringIO(conteudo_bytes.decode('iso-8859-1')), header=None, dtype=str, sep=None, engine='python')
+            
+    if df.empty: return []
         
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     transacoes = []
     idx_header = None
     
+    # Encontra a linha de cabeçalho correta analisando os sinônimos de colunas do Sicoob/Delbank
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "DOCUMENTO", "DEB/CRED", "QUANTIA"]):
+        if any(term in valores for term in ["DATA", "NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "QUANTIA", "DEB/CRED"]):
             idx_header = i
             break
             
@@ -132,29 +119,40 @@ def ler_extrato_dinamico(file, configuracao_bancos):
         col_contraparte = next((c for c in headers if "CONTRAPARTE" in c or "FAVORECIDO" in c or "NOME" in c or "PARCEIRO" in c), None)
         col_valor = next((c for c in headers if "VALOR" in c or "QUANTIA" in c or "VALOR (R$)" in c), None)
         
-        for _, r in dados.iterrows():
+        for idx_row, r in dados.iterrows():
             if pd.isna(r.get(col_data)) or pd.isna(r.get(col_valor)): continue
             
             dt = converter_data(r[col_data])
             v = limpar_valor(r[col_valor])
             if v == 0 or not dt: continue
             
+            # Captura a descrição textual principal da linha
+            desc_banco = str(r[col_desc_banco]).strip() if col_desc_banco and pd.notna(r[col_desc_banco]) else ""
+            
+            # Captura o nome da contraparte (ou extrai de strings longas do Delbank/Sicoob)
             nome_final = ""
             if col_contraparte and col_contraparte in r and pd.notna(r[col_contraparte]):
                 nome_final = str(r[col_contraparte]).strip()
             
-            if not nome_final and col_desc_banco and col_desc_banco in r and pd.notna(r[col_desc_banco]):
-                nome_final = str(r[col_desc_banco]).strip()
+            if not nome_final or nome_final == "" or nome_final.upper() == "NAN":
+                nome_final = desc_banco
                 
-            desc_banco = str(r[col_desc_banco]).strip() if col_desc_banco and pd.notna(r[col_desc_banco]) else ""
+            # Tratamento avançado para extrair o favorecido real quando vem escrito como: "PARA: FULANO" ou "PAGADOR: SICRANO"
+            nome_final_upper = nome_final.upper()
+            if "PARA:" in nome_final_upper:
+                nome_final = nome_final.split("PARA:")[-1].strip()
+            elif "PAGADOR:" in nome_final_upper:
+                nome_final = nome_final.split("PAGADOR:")[-1].strip()
+            elif "TRANSFERENCIA PROPRIETARIA" in nome_final_upper or "SALDO DO DIA" in nome_final_upper:
+                nome_final = "PIXBET"
+                
+            # Identificação inteligente do sinal de Crédito/Débito (Trata o "C" e "D" do Sicoob)
+            texto_linha_completo = (str(r[col_valor]) + " " + (str(r[col_tipo]) if col_tipo else "")).upper()
             
-            tipo_txt = str(r[col_tipo]).upper().strip() if col_tipo and pd.notna(r[col_tipo]) else ""
-            tipo_txt_norm = ''.join(c for c in unicodedata.normalize('NFD', tipo_txt) if unicodedata.category(c) != 'Mn')
-            
-            is_credito = "CREDITO" in tipo_txt_norm or "ENTRADA" in tipo_txt_norm or "C" == tipo_txt_norm
-            if not col_tipo or tipo_txt == "":
-                is_credito = "-" not in str(r[col_valor])
-            
+            is_credito = "CREDITO" in texto_linha_completo or "ENTRADA" in texto_linha_completo or " C" in texto_linha_completo or texto_linha_completo.endswith("C")
+            if "DEBITO" in texto_linha_completo or "SAIDA" in texto_linha_completo or " D" in texto_linha_completo or texto_linha_completo.endswith("D") or "-" in str(r[col_valor]):
+                is_credito = False
+                
             transacoes.append({
                 'Data': dt.strftime('%d/%m/%Y'),
                 'dt_obj': dt,
@@ -169,7 +167,11 @@ def ler_extrato_dinamico(file, configuracao_bancos):
 
 # --- CARREGADORES DO FISCAL ---
 def carregar_cadastro_contas(file):
-    df = forcar_leitura_dataframe(file)
+    file.seek(0)
+    conteudo = file.read()
+    try: df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
+    except: df = pd.read_csv(io.StringIO(conteudo.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
+    
     mapa = {}
     for _, r in df.iterrows():
         valores = [str(x).strip() for x in r.values if pd.notna(x)]
@@ -181,7 +183,11 @@ def carregar_cadastro_contas(file):
     return mapa
 
 def carregar_fiscal_entradas(file):
-    df = forcar_leitura_dataframe(file)
+    file.seek(0)
+    conteudo = file.read()
+    try: df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
+    except: df = pd.read_csv(io.StringIO(conteudo.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
+        
     entradas = []
     for _, row in df.iterrows():
         valores = [str(x).strip() for x in row.values if pd.notna(x)]
@@ -256,7 +262,7 @@ tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TX
 with tab1:
     st.markdown("### Processar Arquivos Brutos")
     colA, colB, colC = st.columns(3)
-    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Selecione todos os extratos que desejar)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
+    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Selecione as planilhas que desejar juntos)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
     with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"], key="cont1")
     with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal (Obrigatório)", type=["xlsx","csv"], key="fisc1")
 
@@ -294,7 +300,7 @@ with tab1:
             if tx['Is_Credito']:
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
-                if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or any(x in tx['Razao_Social'].upper() for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
+                if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or any(x in normalizar_para_match(tx['Razao_Social']) for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
                     hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
                     hist_final = f"RECB {tx['Razao_Social']}"
