@@ -57,36 +57,26 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- MOTOR DETECTOR DE BANCOS E CONTAS CORRENTES ---
+# --- MOTOR DETECTOR SIMPLIFICADO E BLINDADO PARA OS SEUS 3 BANCOS ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
     for _, row in df_bruto.head(25).iterrows():
         texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
     
-    # 1. Busca primeiro por números exatos de contas correntes informados na Sidebar
-    for chave_config, codigo_contabil in configuracao_bancos.items():
-        if codigo_contabil != "":
-            numeros_conta = re.findall(r'\b\d{5,12}\b', chave_config)
-            for num in numeros_conta:
-                if num in texto_cabecalho:
-                    return codigo_contabil
-
-    # 2. Busca secundária por nomes textuais dos bancos padrões
-    if "SICOOB" in texto_cabecalho:
-        return configuracao_bancos["SICOOB"]
-    elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho:
-        return configuracao_bancos["DELBANK/DELFINANCE"]
-    elif "CELCOIN" in texto_cabecalho:
-        return configuracao_bancos.get("CELCOIN 416929172", configuracao_bancos.get("CELCOIN 416929008"))
-            
-    # Fallback pelo nome do arquivo físico
     nome_arq_upper = nome_arquivo.upper()
-    if "SICOOB" in nome_arq_upper: return configuracao_bancos["SICOOB"]
-    if "DELBANK" in nome_arq_upper or "DELF" in nome_arq_upper: return configuracao_bancos["DELBANK/DELFINANCE"]
-
+    
+    # 1. Identificação Rígida por Palavra-Chave no Conteúdo ou no Nome do Arquivo
+    if "SICOOB" in texto_cabecalho or "SICOOB" in nome_arq_upper:
+        return configuracao_bancos["SICOOB"]
+    elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in nome_arq_upper:
+        return configuracao_bancos["DELBANK/DELFINANCE"]
+    elif "CELCOIN" in texto_cabecalho or "CELCOIN" in nome_arq_upper:
+        return configuracao_bancos["CELCOIN"]
+            
+    # Se for um arquivo totalmente misterioso, solicita apontamento na tela
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS TRATADO ---
+# --- EXTRATOR DE EXTRATOS ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo = file.read()
@@ -99,6 +89,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     else:
         df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
     
+    # Atribui o código correto para este arquivo específico
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     
     transacoes = []
@@ -106,7 +97,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "LAVOURA"]):
+        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR"]):
             idx_header = i
             break
             
@@ -229,32 +220,23 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
                 return cod
     return ""
 
-# --- SIDEBAR ATUALIZADA PARA CONTAS EXATAS SEPARADAS POR NÚMERO ---
+# --- SIDEBAR ATUALIZADA EXCLUSIVAMENTE COM AS SUAS 3 CONTAS ---
 with st.sidebar:
     st.header("⚙️ Parametrização de Bancos e Contas")
-    st.info("Informe os códigos reduzidos para cada conta corrente específica:")
+    st.info("Informe os códigos reduzidos corretos da empresa atual:")
     
-    txt_celcoin_172 = st.text_input("Conta CELCOIN (416929172):", value="1857")
-    txt_celcoin_008 = st.text_input("Conta CELCOIN (416929008):", value="1868")
-    txt_sicoob = st.text_input("Código Geral SICOOB:", value="2093")
-    txt_delbank = st.text_input("Código DELBANK / DELFINANCE:", value="1110")
-    
-    st.divider()
-    st.markdown("### ➕ Adicionar Outro Banco Manual")
-    nome_banco_novo = st.text_input("Nome/Número Conta Nova:", value="").upper().strip()
-    txt_banco_novo = st.text_input("Código Contábil da Conta Nova:", value="")
+    txt_celcoin = st.text_input("Código para CELCOIN (Geral):", value="1868")
+    txt_sicoob = st.text_input("Código para SICOOB:", value="2093")
+    txt_delbank = st.text_input("Código para DELBANK / DELFINANCE:", value="1110")
     
     st.divider()
     conta_padrao_receita = st.text_input("Conta de Contraparte Interna (Pix/Aportes):", value="1121")
 
     configuracao_bancos = {
-        "CELCOIN 416929172": txt_celcoin_172.strip(),
-        "CELCOIN 416929008": txt_celcoin_008.strip(),
+        "CELCOIN": txt_celcoin.strip(),
         "SICOOB": txt_sicoob.strip(),
         "DELBANK/DELFINANCE": txt_delbank.strip()
     }
-    if nome_banco_novo and txt_banco_novo:
-        configuracao_bancos[nome_banco_novo] = txt_banco_novo.strip()
 
 st.title("🏦 Portal de Conciliação Multi-Banco Avançado")
 
@@ -281,7 +263,7 @@ with tab1:
         
         bancos_resolvidos_na_tela = {}
         if arquivos_misteriosos:
-            st.warning("⚠️ Mapeamento Manual Requerido: Não consegui identificar a conta de alguns extratos automaticamente. Selecione a qual conta pertencem:")
+            st.warning("⚠️ Mapeamento Manual Requerido: Não consegui identificar o banco de alguns extratos automaticamente. Selecione a qual conta pertencem:")
             for arq in arquivos_misteriosos:
                 escolha = st.selectbox(
                     f"O arquivo contido em '{arq}' refere-se a qual conta configurada?",
@@ -335,9 +317,7 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Pré-Processada com Sucesso! Foram encontradas e unificadas transações de todos os extratos anexados.")
-            
-            # Garante a exibição correta e o ordenamento unificado por data
+            st.success("Conciliação Pré-Processada com Sucesso!")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
@@ -372,7 +352,6 @@ with tab1:
 # --- ABA 2 ---
 with tab2:
     st.markdown("### Gerar TXT de Planilha Prontamente Editada / Auditada")
-    st.info("Suba aqui a planilha .xlsx que você baixou na Aba 1 e corrigiu manualmente.")
     f_editado = st.file_uploader("📥 Anexe a planilha auditada (.xlsx)", type=["xlsx"], key="edit2")
     if f_editado:
         df_audit = pd.read_excel(f_editado, dtype=str)
