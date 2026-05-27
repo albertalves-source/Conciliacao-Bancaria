@@ -65,22 +65,21 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
     
     nome_arq_upper = nome_arquivo.upper()
     
-    # 1. Checa se é SICOOB (no conteúdo ou no nome do arquivo) -> Retorna 2093
+    # 1. Checa se é SICOOB
     if "SICOOB" in texto_cabecalho or "SICOOB" in nome_arq_upper:
         return configuracao_bancos["SICOOB"]
         
-    # 2. Checa se é DELBANK/DELFINANCE -> Retorna 1110
+    # 2. Checa se é DELBANK/DELFINANCE
     elif any(x in texto_cabecalho for x in ["DELBANK", "DELFINANCE", "DEL FINANCE"]) or any(x in nome_arq_upper for x in ["DELBANK", "DELFINANCE", "DELF"]):
         return configuracao_bancos["DELBANK/DELFINANCE"]
         
-    # 3. Checa se é CELCOIN -> Retorna 1868
+    # 3. Checa se é CELCOIN
     elif "CELCOIN" in texto_cabecalho or "CELCOIN" in nome_arq_upper:
         return configuracao_bancos["CELCOIN"]
             
-    # Se falhar totalmente no mapeamento automático, aciona a ajuda na tela
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS TRATADO ---
+# --- EXTRATOR DE EXTRATOS ROBUSTO (Lê Sicoob, Delbank e Celcoin com segurança) ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo = file.read()
@@ -93,7 +92,6 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     else:
         df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
     
-    # Identifica o banco de forma isolada para este arquivo
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     
     transacoes = []
@@ -101,7 +99,8 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "DOCUMENTO"]):
+        # Adicionado mapeamento para aceitar os cabeçalhos do Sicoob ("DEB/CRED") e Delbank ("QUANTIA")
+        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "DOCUMENTO", "DEB/CRED", "QUANTIA"]):
             idx_header = i
             break
             
@@ -110,11 +109,12 @@ def ler_extrato_dinamico(file, configuracao_bancos):
         dados = df.iloc[idx_header+1:].copy()
         dados.columns = headers
         
-        col_data = next((c for c in headers if "DATA" in c), None)
-        col_tipo = next((c for c in headers if "TIPO" in c or "NATUREZA" in c or "DEB/CRED" in c), None)
+        # Mapeadores flexíveis baseados nas planilhas reais enviadas
+        col_data = next((c for c in headers if "DATA" in c or "DT" in c), None)
+        col_tipo = next((c for c in headers if "TIPO" in c or "NATUREZA" in c or "DEB/CRED" in c or "OPERACAO" in c), None)
         col_desc_banco = next((c for c in headers if "DESCRI" in c or "HIST" in c), None)
-        col_contraparte = next((c for c in headers if "CONTRAPARTE" in c or "FAVORECIDO" in c or "NOME" in c), None)
-        col_valor = next((c for c in headers if "VALOR" in c or "QUANTIA" in c), None)
+        col_contraparte = next((c for c in headers if "CONTRAPARTE" in c or "FAVORECIDO" in c or "NOME" in c or "PARCEIRO" in c), None)
+        col_valor = next((c for c in headers if "VALOR" in c or "QUANTIA" in c or "VALOR (R$)" in c), None)
         
         for _, r in dados.iterrows():
             if pd.isna(r.get(col_data)) or pd.isna(r.get(col_valor)): continue
@@ -132,11 +132,13 @@ def ler_extrato_dinamico(file, configuracao_bancos):
                 
             desc_banco = str(r[col_desc_banco]).strip() if col_desc_banco and pd.notna(r[col_desc_banco]) else ""
             
-            tipo_txt = str(r[col_tipo]).upper() if col_tipo and pd.notna(r[col_tipo]) else ""
+            # Validador de sinal de Crédito/Débito flexível para o Sicoob (C/D) e Delbank
+            tipo_txt = str(r[col_tipo]).upper().strip() if col_tipo and pd.notna(r[col_tipo]) else ""
             tipo_txt_norm = ''.join(c for c in unicodedata.normalize('NFD', tipo_txt) if unicodedata.category(c) != 'Mn')
             
             is_credito = "CREDITO" in tipo_txt_norm or "ENTRADA" in tipo_txt_norm or "C" == tipo_txt_norm
             if not col_tipo or tipo_txt == "":
+                # Se não houver coluna de tipo estruturada, analisa se o valor possui o sinal de menos (-)
                 is_credito = "-" not in str(r[col_valor])
             
             transacoes.append({
@@ -224,7 +226,7 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
                 return cod
     return ""
 
-# --- SIDEBAR PARAMETRIZADA COM OS 3 CÓDIGOS CORRETOS ---
+# --- SIDEBAR PARAMETRIZADA COM OS SEUS 3 CÓDIGOS REAIS ---
 with st.sidebar:
     st.header("⚙️ Parametrização de Bancos e Contas")
     st.info("Informe os códigos reduzidos corretos das 3 contas da empresa:")
@@ -250,7 +252,7 @@ tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TX
 with tab1:
     st.markdown("### Processar Arquivos Brutos")
     colA, colB, colC = st.columns(3)
-    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Selecione de 1 a 3 extratos livremente)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
+    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Pode arrastar os arquivos que quiser juntos)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
     with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"], key="cont1")
     with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal (Obrigatório)", type=["xlsx","csv"], key="fisc1")
 
@@ -262,7 +264,7 @@ with tab1:
         for f in f_extratos:
             extrato_lista.extend(ler_extrato_dinamico(f, configuracao_bancos))
             
-        # INTERVENÇÃO HUMANA EM TELA
+        # INTERVENÇÃO HUMANA EM TELA SE O BANCO CONTINUAR DESCONHECIDO
         arquivos_misteriosos = set([tx['Nome_Arquivo_Origem'] for tx in extrato_lista if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio'])])
         
         bancos_resolvidos_na_tela = {}
@@ -278,7 +280,6 @@ with tab1:
         
         matriz_conciliada = []
         for tx in extrato_lista:
-            # Injeta isoladamente o banco correto descoberto para este arquivo específico
             if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio']):
                 cod_banco_atual = bancos_resolvidos_na_tela.get(tx['Nome_Arquivo_Origem'], "CONTA_MANUAL")
             else:
@@ -322,7 +323,7 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Pré-Processada com Sucesso! Todos os extratos anexados foram individualizados.")
+            st.success("Conciliação Pré-Processada com Sucesso!")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
