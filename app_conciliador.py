@@ -57,21 +57,21 @@ def normalizar_para_match(texto):
         txt = txt.replace(termo, "")
     return txt
 
-# --- NOVO MOTOR DETECTOR DE BANCOS DINÂMICO ---
+# --- MELHORIA: MOTOR DETECTOR DE BANCOS DINÂMICO ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
     texto_cabecalho = ""
     for _, row in df_bruto.head(15).iterrows():
         texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
     
-    # Varre as chaves do dicionário configurado na interface (Celcoin, Sicoob, Delbank e o Novo)
+    # Varre as chaves configuradas pelo usuário na Sidebar
     for nome_banco, codigo_banco in configuracao_bancos.items():
         if nome_banco != "" and codigo_banco != "" and nome_banco in texto_cabecalho:
             return codigo_banco
             
-    # Se for um arquivo sem identificação clara, repassa uma tag de solicitação humana
+    # Caso não encontre por texto, joga uma tag para solicitar escolha humana em tela
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS (Atualizado para receber as configurações de Bancos) ---
+# --- EXTRATOR DE EXTRATOS (Adicionado parâmetro configuracao_bancos) ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     if file.name.lower().endswith('.csv'):
@@ -80,7 +80,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     else:
         df = pd.read_excel(file, header=None, dtype=str)
     
-    # Executa a varredura dinâmica de banco
+    # Captura dinâmica do código do banco baseada nas regras/sidebar
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     
     transacoes = []
@@ -228,10 +228,10 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
                 return cod
     return ""
 
-# --- INTERFACE STREAMLIT MODIFICADA PARA SUPORTAR CADASTRO DINÂMICO ---
+# --- MELHORIA: SIDEBAR MODIFICADA PARA SUPORTAR MULTI-BANCO E NOVOS BANCOS ---
 with st.sidebar:
     st.header("⚙️ Parametrização de Bancos da Empresa")
-    st.info("Preencha os códigos reduzidos corretos da empresa atual:")
+    st.info("Preencha os códigos reduzidos corretos da empresa/banca atual:")
     
     txt_celcoin = st.text_input("Código para CELCOIN:", value="1868")
     txt_sicoob = st.text_input("Código para SICOOB:", value="2093")
@@ -239,13 +239,13 @@ with st.sidebar:
     
     st.divider()
     st.markdown("### ➕ Adicionar Novo Banco Manual")
-    nome_banco_novo = st.text_input("Nome do Banco Novo (Ex: INTER, ITAU, BRADESCO):", value="").upper().strip()
-    txt_banco_novo = st.text_input("Código Contábil do Banco Novo:", value="")
+    nome_banco_novo = st.text_input("Nome do Banco Novo (Ex: INTER, ITAU, BRADESCO ou FLABET):", value="").upper().strip()
+    txt_banco_novo = st.text_input("Código Contábil do Banco Novo (Ex: 2139, 1857):", value="")
     
     st.divider()
-    conta_padrao_receita = st.text_input("Conta de Contraparte Interna:", value="1121")
+    conta_padrao_receita = st.text_input("Conta de Contraparte Interna (Pix/Aportes):", value="1121")
 
-    # Estruturação dinâmica das caixas
+    # Alimentação estruturada do dicionário dinâmico
     configuracao_bancos = {
         "CELCOIN": txt_celcoin.strip(),
         "SICOOB": txt_sicoob.strip(),
@@ -270,14 +270,15 @@ with tab1:
         
         extrato_lista = []
         for f in f_extratos:
+            # Correção essencial: Agora passa a configuração dos bancos para a leitura individualizada
             extrato_lista.extend(ler_extrato_dinamico(f, configuracao_bancos))
             
-        # INTERVENÇÃO HUMANA BLINDADA: Se houver extrato sem identificação padrão, solicita o apontamento na tela
+        # MELHORIA: INTERVENÇÃO HUMANA EM TELA SE O BANCO FOR NOVO OU DESCONHECIDO
         arquivos_misteriosos = set([tx['Nome_Arquivo_Origem'] for tx in extrato_lista if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio'])])
         
         bancos_resolvidos_na_tela = {}
         if arquivos_misteriosos:
-            st.warning("⚠️ Não consegui mapear o banco de alguns extratos automaticamente. Selecione abaixo a qual banco eles pertencem:")
+            st.warning("⚠️ Mapeamento Manual Requerido: Não consegui identificar o banco de alguns extratos automaticamente. Selecione a qual banco pertencem:")
             for arq in arquivos_misteriosos:
                 escolha = st.selectbox(
                     f"O arquivo contido em '{arq}' refere-se a qual banco configurado?",
@@ -289,7 +290,7 @@ with tab1:
         matriz_conciliada = []
         
         for tx in extrato_lista:
-            # Resgata o código contábil automático ou o selecionado na tela pelo usuário
+            # MELHORIA: Resgata o código contábil correto obtido por linha e arquivo de origem
             if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio']):
                 cod_banco_atual = bancos_resolvidos_na_tela.get(tx['Nome_Arquivo_Origem'], "CONTA_MANUAL")
             else:
@@ -298,6 +299,7 @@ with tab1:
             codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
             if tx['Is_Credito']:
+                # Correção estrutural: Substituição do cod_banco fixo pelo cod_banco_atual dinâmico
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 
@@ -306,6 +308,7 @@ with tab1:
                 else:
                     hist_final = f"RECB {tx['Razao_Social']}"
             else:
+                # Correção estrutural: Substituição do cod_banco fixo pelo cod_banco_atual dinâmico
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco_atual
                 
@@ -327,7 +330,7 @@ with tab1:
                 'Data': tx['Data'],
                 'Deb': c_deb,
                 'Cred': c_crd,
-                'Valor_Original': tx['Valor'],
+                'Valor_Original': tx['Valor'], 
                 'Valor': formatar_moeda_br(tx['Valor']),
                 'Histórico': " ".join(hist_final.upper().split())
             })
