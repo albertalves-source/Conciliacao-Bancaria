@@ -56,13 +56,12 @@ def normalizar_para_match(texto):
     if not texto: return ""
     txt = str(texto).upper().strip()
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
-    txt = re.sub(r'[^A-Z0-9\s]', '', txt) # Preserva espaços temporariamente para isolar sobrenomes
+    txt = re.sub(r'[^A-Z0-9\s]', '', txt)
     txt = re.sub(r'\s+', ' ', txt).strip()
     
-    # Remove terminologias empresariais para focar na raiz do nome
     termos_remover = ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]
     palavras = txt.split(' ')
-    palavras_filtradas = [p for p in palavras if p not p in termos_remover]
+    palavras_filtradas = [p for p in palavras if p not in termos_remover]
     
     return "".join(palavras_filtradas)
 
@@ -132,7 +131,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             nome_final = ""
             
             if "PARA:" in linha_completa_txt:
-                nome_final = linha_texto_completa = linha_completa_txt.split("PARA:")[-1].strip()
+                nome_final = linha_completa_txt.split("PARA:")[-1].strip()
             elif "PAGADOR:" in linha_completa_txt:
                 nome_final = linha_completa_txt.split("PAGADOR:")[-1].strip()
             
@@ -275,12 +274,11 @@ def carregar_fiscal_entradas(file):
                 entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- MELHORIA CRÍTICA: BUSCA CONTÁBIL RÍGIDA CONTRA MATCHES PARCIAIS ERRONEOS ---
+# --- BUSCA CONTÁBIL BLINDADA CONTRA MATCHES PARCIAIS ERRONEOS ---
 def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return ""
     
-    # Regra absoluta das bancas contábeis
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita
         
@@ -294,18 +292,17 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     if norm_pesquisa in regras_bancarias_fixas:
         return regras_bancarias_fixas[norm_pesquisa]
         
-    # 1. TRAVA RÍGIDA: O nome do extrato precisa ser 100% IDÊNTICO ao do plano de contas
+    # 1. Cruzamento Exato Líquido (Garante correspondências perfeitas)
     if norm_pesquisa in mapa_contas:
         return mapa_contas[norm_pesquisa]
         
-    # 2. SEGUNDA TRAVA DE SEGURANÇA: Só aceita se houver casamento exato pelo prefixo inicial extenso
-    # (Evita que "MARIA DA SILVA" case com "MARIA LIDIA DE OLIVEIRA SENA")
-    if len(norm_pesquisa) >= 8:
+    # 2. Busca de Aproximação Inteligente pelo Início do Nome (Crucial para o padrão Delfinance)
+    # Evita erros cruzados forçando correspondência apenas se os 8 primeiros caracteres baterem
+    if len(norm_pesquisa) >= 5:
         for nome_cad, cod in mapa_contas.items():
-            if nome_cad.startswith(norm_pesquisa[:10]) or norm_pesquisa.startswith(nome_cad[:10]):
+            if nome_cad.startswith(norm_pesquisa[:8]) or norm_pesquisa.startswith(nome_cad[:8]):
                 return cod
                 
-    # Se não houver certeza absoluta e exatidão, o sistema joga para CONTA_MANUAL de forma segura
     return ""
 
 # --- SIDEBAR PARAMETRIZADA ---
