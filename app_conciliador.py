@@ -56,10 +56,15 @@ def normalizar_para_match(texto):
     if not texto: return ""
     txt = str(texto).upper().strip()
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
-    txt = re.sub(r'[^A-Z0-9]', '', txt)
-    for termo in ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]:
-        txt = txt.replace(termo, "")
-    return txt
+    txt = re.sub(r'[^A-Z0-9\s]', '', txt) # Preserva espaços temporariamente para isolar sobrenomes
+    txt = re.sub(r'\s+', ' ', txt).strip()
+    
+    # Remove terminologias empresariais para focar na raiz do nome
+    termos_remover = ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]
+    palavras = txt.split(' ')
+    palavras_filtradas = [p for p in palavras if p not p in termos_remover]
+    
+    return "".join(palavras_filtradas)
 
 # --- MOTOR DETECTOR DE BANCOS ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
@@ -78,7 +83,7 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
             
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS INTELIGENTE ---
+# --- EXTRATOR DE EXTRATOS ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -96,27 +101,24 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     transacoes = []
     
-    # --- PROCESSO ESPECIAL ADAPTADO PARA O LAYOUT EXATO DA DELFINANCE ---
+    # FORMATO DELBANK/DELFINANCE
     if cod_banco_identificado == configuracao_bancos["DELBANK/DELFINANCE"]:
         for idx, row in df.iterrows():
             valores_originais = [str(x).strip() for x in row.values if pd.notna(x)]
             if not valores_originais: continue
             
-            # Valida se a linha começa com uma data (Ex: 2026-04-01)
             dt = converter_data(valores_originais[0])
             if not dt: continue
             
             desc_banco = ""
             valor_encontrado = 0.0
             
-            # Localiza a descrição/historico na linha
             for v in valores_originais[1:]:
                 v_upper = v.upper()
                 if any(x in v_upper for x in ["PIX", "TED", "TRANSFERENCIA", "PAGAMENTO", "BOLETO", "BANCO EMISSOR"]):
                     desc_banco = v
                     break
             
-            # Localiza o valor monetário da linha
             for v in valores_originais[1:]:
                 if any(c in v for c in [',', '.']) and any(c.isdigit() for c in v) and "BANCO" not in v.upper():
                     val_limpo = limpar_valor(v)
@@ -126,16 +128,14 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             
             if valor_encontrado == 0: continue
             
-            # Captura profunda do favorecido combinando todas as células daquela linha
             linha_completa_txt = " ".join(valores_originais).upper()
             nome_final = ""
             
             if "PARA:" in linha_completa_txt:
-                nome_final = linha_completa_txt.split("PARA:")[-1].strip()
+                nome_final = linha_texto_completa = linha_completa_txt.split("PARA:")[-1].strip()
             elif "PAGADOR:" in linha_completa_txt:
                 nome_final = linha_completa_txt.split("PAGADOR:")[-1].strip()
             
-            # Remove dados secundários que o banco agrupa
             nome_final = nome_final.split("BANCO EMISSOR:")[0].split("VALOR:")[0].split("R$")[0].strip()
             
             if not nome_final or nome_final == "" or nome_final == "NAN":
@@ -160,7 +160,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             })
         return transacoes
 
-    # --- FLUXO PADRÃO (Para Celcoin e Sicoob) ---
+    # FORMATO PADRÃO (Celcoin e Sicoob)
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -275,9 +275,12 @@ def carregar_fiscal_entradas(file):
                 entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
+# --- MELHORIA CRÍTICA: BUSCA CONTÁBIL RÍGIDA CONTRA MATCHES PARCIAIS ERRONEOS ---
 def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return ""
+    
+    # Regra absoluta das bancas contábeis
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita
         
@@ -291,15 +294,18 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     if norm_pesquisa in regras_bancarias_fixas:
         return regras_bancarias_fixas[norm_pesquisa]
         
+    # 1. TRAVA RÍGIDA: O nome do extrato precisa ser 100% IDÊNTICO ao do plano de contas
     if norm_pesquisa in mapa_contas:
         return mapa_contas[norm_pesquisa]
-    for nome_cad, cod in mapa_contas.items():
-        if norm_pesquisa in nome_cad or nome_cad in norm_pesquisa:
-            return cod
-    if len(norm_pesquisa) >= 4:
+        
+    # 2. SEGUNDA TRAVA DE SEGURANÇA: Só aceita se houver casamento exato pelo prefixo inicial extenso
+    # (Evita que "MARIA DA SILVA" case com "MARIA LIDIA DE OLIVEIRA SENA")
+    if len(norm_pesquisa) >= 8:
         for nome_cad, cod in mapa_contas.items():
-            if nome_cad.startswith(norm_pesquisa[:6]) or norm_pesquisa.startswith(nome_cad[:6]):
+            if nome_cad.startswith(norm_pesquisa[:10]) or norm_pesquisa.startswith(nome_cad[:10]):
                 return cod
+                
+    # Se não houver certeza absoluta e exatidão, o sistema joga para CONTA_MANUAL de forma segura
     return ""
 
 # --- SIDEBAR PARAMETRIZADA ---
@@ -413,7 +419,7 @@ with tab1:
                 st.download_button(
                     label="📥 1. Baixar Planilha para Ajustes (.XLSX)",
                     data=output_excel.getvalue(),
-                    file_name=f"Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"Analise_Humana_Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
