@@ -52,18 +52,19 @@ def converter_data(data_obj):
     except: pass
     return None
 
-def normalizar_para_match(texto):
-    if not texto: return ""
+# --- NOVA HIGIENIZAÇÃO EM PALAVRAS (Mantém a estrutura de nomes/sobrenomes para a análise) ---
+def higienizar_texto_lista_palavras(texto):
+    if not texto: return []
     txt = str(texto).upper().strip()
+    # Remove acentos
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
+    # Mantém apenas letras, números e espaços simples
     txt = re.sub(r'[^A-Z0-9\s]', '', txt)
     txt = re.sub(r'\s+', ' ', txt).strip()
     
     termos_remover = ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]
     palavras = txt.split(' ')
-    palavras_filtradas = [p for p in palavras if p not in termos_remover]
-    
-    return "".join(palavras_filtradas)
+    return [p for p in palavras if p and p not in termos_remover]
 
 # --- MOTOR DETECTOR DE BANCOS ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
@@ -219,7 +220,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             })
     return transacoes
 
-# --- CARREGADORES DO FISCAL E CADASTRO ---
+# --- CARREGADORES DO FISCAL E PLANO DE CONTAS ---
 def carregar_cadastro_contas(file):
     file.seek(0)
     conteudo = file.read()
@@ -231,9 +232,15 @@ def carregar_cadastro_contas(file):
         valores = [str(x).strip() for x in r.values if pd.notna(x)]
         if len(valores) >= 2:
             cod = valores[0].split('.')[0]
-            nome = valores[-1].upper().strip()
+            nome_completo_cadastrado = valores[-1].upper().strip()
             if cod.isdigit():
-                mapa[normalizar_para_match(nome)] = cod
+                # Guarda a tupla: (lista de palavras higienizadas, nome original por extenso completo)
+                palavras_chave = higienizar_texto_lista_palavras(nome_completo_cadastrado)
+                if palavras_chave:
+                    mapa[cod] = {
+                        'palavras': palavras_chave,
+                        'nome_completo': nome_completo_cadastrado
+                    }
     return mapa
 
 def carregar_fiscal_entradas(file):
@@ -274,36 +281,47 @@ def carregar_fiscal_entradas(file):
                 entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- BUSCA CONTÁBIL BLINDADA CONTRA MATCHES PARCIAIS ERRONEOS ---
-def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
-    norm_pesquisa = normalizar_para_match(nome_pesquisa)
-    if not norm_pesquisa: return ""
+# --- NOVO ANALISADOR DE INTELIGÊNCIA ARTIFICIAL CONTÁBIL (Puxa o nome completo do Plano de Contas) ---
+def analisar_e_cruzar_nome_completo(nome_extrato, mapa_contas, conta_fallback_receita):
+    palavras_extrato = higienizar_texto_lista_palavras(nome_extrato)
+    if not palavras_extrato:
+        return "CONTA_MANUAL", nome_extrato
+        
+    txt_extrato_unificado = "".join(palavras_extrato)
     
-    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
-        return conta_fallback_receita
+    # 1. Regra para Bancas Internas
+    if any(x in txt_extrato_unificado for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
+        return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
         
+    # 2. Regras Fixas de Impostos/Tarifas do Banco
     regras_bancarias_fixas = {
-        "DEBCONVTRIBUTOSFEDERAISRFB": "2541", 
-        "DEBTITCOMPEEFETIVADO": "2100",       
-        "DEBTITULOCOBRANCA": "2100",          
-        "DEBITOPACOTESERVICOS": "4122",
-        "PAGAMENTODEBOLETO": "2100"
+        "DEBCONVTRIBUTOSFEDERAISRFB": ("2541", "DÉBITO CONVÊNIO TRIBUTOS FEDERAIS - RFB"), 
+        "DEBTITCOMPEEFETIVADO": ("2100", "DÉBITO TÍTULO COMPENSAÇÃO EFETIVADO"),       
+        "DEBTITULOCOBRANCA": ("2100", "DÉBITO TÍTULO COBRANÇA"),          
+        "DEBITOPACOTESERVICOS": ("4122", "TARIFAS BANCÁRIAS - PACOTE DE SERVIÇOS"),
+        "PAGAMENTODEBOLETO": ("2100", "PAGAMENTO DE BOLETO BANCÁRIO")
     }
-    if norm_pesquisa in regras_bancarias_fixas:
-        return regras_bancarias_fixas[norm_pesquisa]
+    if txt_extrato_unificado in regras_bancarias_fixas:
+        return regras_bancarias_fixas[txt_extrato_unificado]
+
+    # 3. NOVO LOOP: Cruzamento por Token Sequencial (Resolve o problema da Val Bezerra)
+    # Se o extrato trouxer "ERNILDO JUNIOR", ele casa sequencialmente com "ERNILDO JUNIOR DE FARIAS SANTOS"
+    for cod_reduzido, dados_cadastrados in mapa_contas.items():
+        palavras_cad = dados_cadastrados['palavras']
+        nome_completo_original = dados_cadastrados['nome_completo']
         
-    # 1. Cruzamento Exato Líquido (Garante correspondências perfeitas)
-    if norm_pesquisa in mapa_contas:
-        return mapa_contas[norm_pesquisa]
-        
-    # 2. Busca de Aproximação Inteligente pelo Início do Nome (Crucial para o padrão Delfinance)
-    # Evita erros cruzados forçando correspondência apenas se os 8 primeiros caracteres baterem
-    if len(norm_pesquisa) >= 5:
-        for nome_cad, cod in mapa_contas.items():
-            if nome_cad.startswith(norm_pesquisa[:8]) or norm_pesquisa.startswith(nome_cad[:8]):
-                return cod
+        # Caso 1: Match Perfeito Direto
+        if "".join(palavras_extrato) == "".join(palavras_cad):
+            return cod_reduzido, nome_completo_original
+            
+        # Caso 2: O extrato trouxe um nome abreviado (Ex: ERNILDO JUNIOR) que bate com o início do cadastro completo
+        tamanho_busca = min(len(palavras_extrato), len(palavras_cad))
+        if tamanho_busca >= 2: # Exige que pelo menos Primeiro Nome + Sobrenome casem para ser seguro
+            if palavras_extrato[:tamanho_busca] == palavras_cad[:tamanho_busca]:
+                return cod_reduzido, nome_completo_original
                 
-    return ""
+    # Se não achou de jeito nenhum, mantém o nome do extrato mas joga o alerta humano
+    return "CONTA_MANUAL", nome_extrato
 
 # --- SIDEBAR PARAMETRIZADA ---
 with st.sidebar:
@@ -315,13 +333,7 @@ with st.sidebar:
     txt_delbank = st.text_input("Código DELBANK / DELFINANCE:", value="1110")
     
     st.divider()
-    conta_padrao_receita = st.text_input("Conta de Contraparte Interna (Pix/Aportes):", value="1121")
-
-    configuracao_bancos = {
-        "CELCOIN": txt_celcoin.strip(),
-        "SICOOB": txt_sicoob.strip(),
-        "DELBANK/DELFINANCE": txt_delbank.strip()
-    }
+    conta_padrao_receita = st.text_input("Conta Interna Operacional (Bancas/Pix):", value="1121")
 
 st.title("🏦 Portal de Conciliação Multi-Banco Avançado")
 
@@ -347,7 +359,7 @@ with tab1:
         
         bancos_resolvidos_na_tela = {}
         if arquivos_misteriosos:
-            st.warning("⚠️ Mapeamento Manual Requerido: Não consegui identificar o banco de alguns extratos automaticamente. Selecione a qual conta pertencem:")
+            st.warning("⚠️ Mapeamento Manual Requerido: Selecione a qual conta pertencem:")
             for arq in arquivos_misteriosos:
                 escolha = st.selectbox(
                     f"O arquivo contido em '{arq}' refere-se a qual conta configurada?",
@@ -363,15 +375,20 @@ with tab1:
             else:
                 cod_banco_atual = tx['Cod_Banco_Proprio']
                 
-            codigo_fornecedor = buscar_codigo_conta(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
+            # EXECUTA A NOVA ANÁLISE PROFUNDA: Retorna tanto o código contábil quanto o NOME COMPREENSÍVEL COMPLETO por extenso
+            codigo_fornecedor, nome_completo_analisado = analisar_e_cruzar_nome_completo(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
+            termo_banco_cru = tx['Desc_Banco'].strip().upper() if tx['Desc_Banco'] else "PIX"
+            if not termo_banco_cru or termo_banco_cru == "NAN" or "PARA:" in termo_banco_cru or "PAGADOR:" in termo_banco_cru: 
+                termo_banco_cru = "PIX"
+                
             if tx['Is_Credito']:
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or any(x in normalizar_para_match(tx['Razao_Social']) for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
                     hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
-                    hist_final = f"RECB {tx['Razao_Social']}"
+                    hist_final = f"RECB {termo_banco_cru} DE {nome_completo_analisado}"
             else:
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco_atual
@@ -385,9 +402,9 @@ with tab1:
                         break
                 
                 if nota_vinculada:
-                    hist_final = f"PAGTO NF {nota_vinculada} {tx['Razao_Social']}"
+                    hist_final = f"PAGTO NF {nota_vinculada} {termo_banco_cru} A {nome_completo_analisado}"
                 else:
-                    hist_final = f"PAGTO {tx['Razao_Social']}"
+                    hist_final = f"PAGTO {termo_banco_cru} A {nome_completo_analisado}"
                     
             matriz_conciliada.append({
                 'Data': tx['Data'],
@@ -401,7 +418,7 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Pré-Processada com Sucesso! Os 3 bancos foram unificados.")
+            st.success("Conciliação Pré-Processada com Sucesso! Análise de nomes completa aplicada.")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
