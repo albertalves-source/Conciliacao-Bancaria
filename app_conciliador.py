@@ -281,40 +281,42 @@ def carregar_fiscal_entradas(file):
                 entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- CRÚCIO DE CORREÇÃO: RETORNA O CÓDIGO DA CONTA E O NOME COMPLETO DO RAZÃO CONTÁBIL ---
+# --- BUSCA CONTÁBIL BLINDADA DA VAL BEZERRA (SEM MISTURAR NOMES PARECIDOS) ---
 def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
-    if not norm_pesquisa: return "", nome_pesquisa
+    if not norm_pesquisa: return "", nome_pesquisa.upper().strip()
     
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
         
     regras_bancarias_fixas = {
-        "DEBCONVTRIBUTOSFEDERAISRFB": ("2541", "DÉBITO CONVÊNIO TRIBUTOS FEDERAIS - RFB"), 
-        "DEBTITCOMPEEFETIVADO": ("2100", "DÉBITO TÍTULO COMPENSAÇÃO EFETIVADO"),       
-        "DEBTITULOCOBRANCA": ("2100", "DÉBITO TÍTULO COBRANÇA"),          
-        "DEBITOPACOTESERVICOS": ("4122", "TARIFAS BANCÁRIAS - PACOTE DE SERVIÇOS"),
-        "PAGAMENTODEBOLETO": ("2100", "PAGAMENTO DE BOLETO BANCÁRIO")
+        "DEBCONVTRIBUTOSFEDERAISRFB": ("2541", "DEB CONV TRIBUTOS FEDERAIS RFB"), 
+        "DEBTITCOMPEEFETIVADO": ("2100", "DEB TIT COMPE EFETIVADO"),       
+        "DEBTITULOCOBRANCA": ("2100", "DEB TITULO COBRANCA"),          
+        "DEBITOPACOTESERVICOS": ("4122", "DEBITO PACOTE SERVICOS"),
+        "PAGAMENTODEBOLETO": ("2100", "PAGAMENTO DE BOLETO")
     }
     if norm_pesquisa in regras_bancarias_fixas:
         return regras_bancarias_fixas[norm_pesquisa]
         
     palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
     
-    # 1. Busca Exata
+    # 1. TRAVA ABSOLUTA: Cruzamento 100% Idêntico
     for cod_reduzido, dados in mapa_contas.items():
         if "".join(palavras_extrato) == "".join(dados['palavras']):
             return cod_reduzido, dados['nome_completo']
             
-    # 2. Busca por Início de Nome Curto Inteligente (Atende o Ernildo, Diomar, etc.)
+    # 2. MATCH INTELIGENTE POR PALAVRAS INTEGRUTAS (Ex: ERNILDO JUNIOR -> ERNILDO OPERAÇÃO DE CRYPTO)
+    # Só executa se o nome buscado tiver pelo menos 2 palavras extensas para não confundir "Marias"
     if len(palavras_extrato) >= 2:
         for cod_reduzido, dados in mapa_contas.items():
             palavras_cad = dados['palavras']
-            tamanho_busca = min(len(palavras_extrato), len(palavras_cad))
-            if palavras_extrato[:tamanho_busca] == palavras_cad[:tamanho_busca]:
+            # Garante que as primeiras palavras do extrato casem exatamente com o plano (Ex: ERNILDO + JUNIOR)
+            tamanho_corte = min(len(palavras_extrato), len(palavras_cad))
+            if palavras_extrato[:tamanho_corte] == palavras_cad[:tamanho_corte]:
                 return cod_reduzido, dados['nome_completo']
                 
-    # Se não achou na contabilidade, mantém o nome limpo do extrato por extenso
+    # SE NÃO ACHOU EXATO NO PLANO, MANTÉM O NOME COMPLETO DO EXTRATO (Não chuta conta errada!)
     return "", nome_pesquisa.upper().strip()
 
 # --- SIDEBAR PARAMETRIZADA ---
@@ -328,12 +330,6 @@ with st.sidebar:
     
     st.divider()
     conta_padrao_receita = st.text_input("Conta Interna Operacional (Bancas/Pix):", value="1121")
-
-    configuracao_bancos = {
-        "CELCOIN": txt_celcoin.strip(),
-        "SICOOB": txt_sicoob.strip(),
-        "DELBANK/DELFINANCE": txt_delbank.strip()
-    }
 
 st.title("🏦 Portal de Conciliação Multi-Banco Avançado")
 
@@ -359,20 +355,16 @@ with tab1:
         for tx in extrato_lista:
             cod_banco_atual = tx['Cod_Banco_Proprio']
             
-            # Puxa os dados contábeis completos: código e o nome por extenso contido no plano de contas
-            codigo_fornecedor, nome_oficial_contabil = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
+            # Puxa o código e o nome oficial da contabilidade
+            codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
-            termo_banco_cru = tx['Desc_Banco'].strip().upper() if tx['Desc_Banco'] else "PIX"
-            if not termo_banco_cru or termo_banco_cru == "NAN" or "PARA:" in termo_banco_cru or "PAGADOR:" in termo_banco_cru: 
-                termo_banco_cru = "PIX"
-                
             if tx['Is_Credito']:
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
                 if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or any(x in normalizar_para_match(tx['Razao_Social']) for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
                     hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
-                    hist_final = f"RECB {termo_banco_cru} DE {nome_oficial_contabil}"
+                    hist_final = f"RECEB {nome_final_extenso}"
             else:
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco_atual
@@ -386,9 +378,9 @@ with tab1:
                         break
                 
                 if nota_vinculada:
-                    hist_final = f"PAGTO NF {nota_vinculada} {termo_banco_cru} A {nome_oficial_contabil}"
+                    hist_final = f"PAGTO NF {nota_vinculada} {nome_final_extenso}"
                 else:
-                    hist_final = f"PAGTO {termo_banco_cru} A {nome_oficial_contabil}"
+                    hist_final = f"PAGTO {nome_final_extenso}"
                     
             matriz_conciliada.append({
                 'Data': tx['Data'],
@@ -402,7 +394,7 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Processada com Sucesso! Os nomes contábeis foram preservados.")
+            st.success("Conciliação Processada com Sucesso! Os históricos de nomes foram corrigidos.")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
