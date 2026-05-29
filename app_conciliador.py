@@ -52,19 +52,20 @@ def converter_data(data_obj):
     except: pass
     return None
 
-# --- NOVA HIGIENIZAÇÃO EM PALAVRAS (Mantém a estrutura de nomes/sobrenomes para a análise) ---
 def higienizar_texto_lista_palavras(texto):
     if not texto: return []
     txt = str(texto).upper().strip()
-    # Remove acentos
     txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
-    # Mantém apenas letras, números e espaços simples
     txt = re.sub(r'[^A-Z0-9\s]', '', txt)
     txt = re.sub(r'\s+', ' ', txt).strip()
     
     termos_remover = ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]
     palavras = txt.split(' ')
     return [p for p in palavras if p and p not in termos_remover]
+
+def normalizar_para_match(texto):
+    palavras = higienizar_texto_lista_palavras(texto)
+    return "".join(palavras)
 
 # --- MOTOR DETECTOR DE BANCOS ---
 def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquivo):
@@ -83,7 +84,7 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
             
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS ---
+# --- EXTRATOR DE EXTRATOS BRUTOS ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -142,7 +143,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
                 nome_final = desc_banco
                 
             if any(x in linha_completa_txt for x in ["TRANSFERENCIA PROPRIETARIA", "PIXBET SOLUCOES"]):
-                nome_final = "PIXBET"
+                nome_final = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
                 
             is_credito = "PAGADOR" in linha_completa_txt or "RECEBIDA" in linha_completa_txt
             if any(x in linha_completa_txt for x in ["ENVIADO", "ENVIADA", "PAGAMENTO"]):
@@ -160,7 +161,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             })
         return transacoes
 
-    # FORMATO PADRÃO (Celcoin e Sicoob)
+    # FORMATO CELCOIN E SICOOB
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -201,7 +202,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             elif "PAGADOR:" in nome_final_upper:
                 nome_final = nome_final.split("PAGADOR:")[-1].strip()
             elif "TRANSFERENCIA PROPRIETARIA" in nome_final_upper or "SALDO DO DIA" in nome_final_upper:
-                nome_final = "PIXBET"
+                nome_final = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
                 
             texto_linha_completo = (str(r[col_valor]) + " " + (str(r[col_tipo]) if col_tipo else "")).upper()
             is_credito = "CREDITO" in texto_linha_completo or "ENTRADA" in texto_linha_completo or " C" in texto_linha_completo or texto_linha_completo.endswith("C")
@@ -234,7 +235,6 @@ def carregar_cadastro_contas(file):
             cod = valores[0].split('.')[0]
             nome_completo_cadastrado = valores[-1].upper().strip()
             if cod.isdigit():
-                # Guarda a tupla: (lista de palavras higienizadas, nome original por extenso completo)
                 palavras_chave = higienizar_texto_lista_palavras(nome_completo_cadastrado)
                 if palavras_chave:
                     mapa[cod] = {
@@ -281,47 +281,39 @@ def carregar_fiscal_entradas(file):
                 entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- NOVO ANALISADOR DE INTELIGÊNCIA ARTIFICIAL CONTÁBIL (Puxa o nome completo do Plano de Contas) ---
-def analisar_e_cruzar_nome_completo(nome_extrato, mapa_contas, conta_fallback_receita):
-    palavras_extrato = higienizar_texto_lista_palavras(nome_extrato)
-    if not palavras_extrato:
-        return "CONTA_MANUAL", nome_extrato
-        
-    txt_extrato_unificado = "".join(palavras_extrato)
+# --- PROCESSO DE BUSCA DA CONTA CONTÁBIL ---
+def buscar_codigo_conta_somante(nome_pesquisa, mapa_contas, conta_fallback_receita):
+    norm_pesquisa = normalizar_para_match(nome_pesquisa)
+    if not norm_pesquisa: return ""
     
-    # 1. Regra para Bancas Internas
-    if any(x in txt_extrato_unificado for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
-        return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
+    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
+        return conta_fallback_receita
         
-    # 2. Regras Fixas de Impostos/Tarifas do Banco
     regras_bancarias_fixas = {
-        "DEBCONVTRIBUTOSFEDERAISRFB": ("2541", "DÉBITO CONVÊNIO TRIBUTOS FEDERAIS - RFB"), 
-        "DEBTITCOMPEEFETIVADO": ("2100", "DÉBITO TÍTULO COMPENSAÇÃO EFETIVADO"),       
-        "DEBTITULOCOBRANCA": ("2100", "DÉBITO TÍTULO COBRANÇA"),          
-        "DEBITOPACOTESERVICOS": ("4122", "TARIFAS BANCÁRIAS - PACOTE DE SERVIÇOS"),
-        "PAGAMENTODEBOLETO": ("2100", "PAGAMENTO DE BOLETO BANCÁRIO")
+        "DEBCONVTRIBUTOSFEDERAISRFB": "2541", 
+        "DEBTITCOMPEEFETIVADO": "2100",       
+        "DEBTITULOCOBRANCA": "2100",          
+        "DEBITOPACOTESERVICOS": "4122",
+        "PAGAMENTODEBOLETO": "2100"
     }
-    if txt_extrato_unificado in regras_bancarias_fixas:
-        return regras_bancarias_fixas[txt_extrato_unificado]
-
-    # 3. NOVO LOOP: Cruzamento por Token Sequencial (Resolve o problema da Val Bezerra)
-    # Se o extrato trouxer "ERNILDO JUNIOR", ele casa sequencialmente com "ERNILDO JUNIOR DE FARIAS SANTOS"
+    if norm_pesquisa in regras_bancarias_fixas:
+        return regras_bancarias_fixas[norm_pesquisa]
+        
+    palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
+    
     for cod_reduzido, dados_cadastrados in mapa_contas.items():
         palavras_cad = dados_cadastrados['palavras']
-        nome_completo_original = dados_cadastrados['nome_completo']
-        
-        # Caso 1: Match Perfeito Direto
         if "".join(palavras_extrato) == "".join(palavras_cad):
-            return cod_reduzido, nome_completo_original
+            return cod_reduzido
             
-        # Caso 2: O extrato trouxe um nome abreviado (Ex: ERNILDO JUNIOR) que bate com o início do cadastro completo
-        tamanho_busca = min(len(palavras_extrato), len(palavras_cad))
-        if tamanho_busca >= 2: # Exige que pelo menos Primeiro Nome + Sobrenome casem para ser seguro
+    if len(palavras_extrato) >= 2:
+        for cod_reduzido, dados_cadastrados in mapa_contas.items():
+            palavras_cad = dados_cadastrados['palavras']
+            tamanho_busca = min(len(palavras_extrato), len(palavras_cad))
             if palavras_extrato[:tamanho_busca] == palavras_cad[:tamanho_busca]:
-                return cod_reduzido, nome_completo_original
+                return cod_reduzido
                 
-    # Se não achou de jeito nenhum, mantém o nome do extrato mas joga o alerta humano
-    return "CONTA_MANUAL", nome_extrato
+    return ""
 
 # --- SIDEBAR PARAMETRIZADA ---
 with st.sidebar:
@@ -343,7 +335,7 @@ tab1, tab2 = st.tabs(["🔄 1. Nova Conciliação (Completa)", "📤 2. Gerar TX
 with tab1:
     st.markdown("### Processar Arquivos Brutos")
     colA, colB, colC = st.columns(3)
-    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários (Suba quantos arquivos desejar juntos)", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
+    with colA: f_extratos = st.file_uploader("📂 Extratos Bancários", type=["xlsx","csv","pdf"], accept_multiple_files=True, key="ext1")
     with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"], key="cont1")
     with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal (Obrigatório)", type=["xlsx","csv"], key="fisc1")
 
@@ -355,28 +347,15 @@ with tab1:
         for f in f_extratos:
             extrato_lista.extend(ler_extrato_dinamico(f, configuracao_bancos))
             
-        arquivos_misteriosos = set([tx['Nome_Arquivo_Origem'] for tx in extrato_lista if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio'])])
-        
-        bancos_resolvidos_na_tela = {}
-        if arquivos_misteriosos:
-            st.warning("⚠️ Mapeamento Manual Requerido: Selecione a qual conta pertencem:")
-            for arq in arquivos_misteriosos:
-                escolha = st.selectbox(
-                    f"O arquivo contido em '{arq}' refere-se a qual conta configurada?",
-                    options=list(configuracao_bancos.keys()),
-                    key=f"select_ajuda_{arq}"
-                )
-                bancos_resolvidos_na_tela[arq] = configuracao_bancos[escolha]
-        
         matriz_conciliada = []
         for tx in extrato_lista:
-            if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio']):
-                cod_banco_atual = bancos_resolvidos_na_tela.get(tx['Nome_Arquivo_Origem'], "CONTA_MANUAL")
-            else:
-                cod_banco_atual = tx['Cod_Banco_Proprio']
-                
-            # EXECUTA A NOVA ANÁLISE PROFUNDA: Retorna tanto o código contábil quanto o NOME COMPREENSÍVEL COMPLETO por extenso
-            codigo_fornecedor, nome_completo_analisado = analisar_e_cruzar_nome_completo(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
+            cod_banco_atual = tx['Cod_Banco_Proprio']
+            
+            # 1. Descobre apenas o código contábil correspondente
+            codigo_fornecedor = buscar_codigo_conta_somante(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
+            
+            # 2. FIX DO HISTÓRICO DA VAL: Força o uso do Nome Completo Exato que veio escrito de dentro do extrato bancário
+            nome_original_do_extrato = str(tx['Razao_Social']).upper().strip()
             
             termo_banco_cru = tx['Desc_Banco'].strip().upper() if tx['Desc_Banco'] else "PIX"
             if not termo_banco_cru or termo_banco_cru == "NAN" or "PARA:" in termo_banco_cru or "PAGADOR:" in termo_banco_cru: 
@@ -388,7 +367,7 @@ with tab1:
                 if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or any(x in normalizar_para_match(tx['Razao_Social']) for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
                     hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
-                    hist_final = f"RECB {termo_banco_cru} DE {nome_completo_analisado}"
+                    hist_final = f"RECB {termo_banco_cru} DE {nome_original_do_extrato}"
             else:
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco_atual
@@ -402,9 +381,9 @@ with tab1:
                         break
                 
                 if nota_vinculada:
-                    hist_final = f"PAGTO NF {nota_vinculada} {termo_banco_cru} A {nome_completo_analisado}"
+                    hist_final = f"PAGTO NF {nota_vinculada} {termo_banco_cru} A {nome_original_do_extrato}"
                 else:
-                    hist_final = f"PAGTO {termo_banco_cru} A {nome_completo_analisado}"
+                    hist_final = f"PAGTO {termo_banco_cru} A {nome_original_do_extrato}"
                     
             matriz_conciliada.append({
                 'Data': tx['Data'],
@@ -418,11 +397,11 @@ with tab1:
         df_final = pd.DataFrame(matriz_conciliada)
         
         if not df_final.empty:
-            st.success("Conciliação Pré-Processada com Sucesso! Análise de nomes completa aplicada.")
+            st.success("Conciliação Processada! Históricos fixados com o nome completo original.")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             st.markdown("---")
-            st.markdown("### 📥 Escolha como deseja exportar:")
+            st.markdown("### 📥 Exportação:")
             col_btn1, col_btn2 = st.columns(2)
             
             with col_btn1:
@@ -433,7 +412,7 @@ with tab1:
                 st.download_button(
                     label="📥 1. Baixar Planilha para Ajustes (.XLSX)",
                     data=output_excel.getvalue(),
-                    file_name=f"Analise_Humana_Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"Analise_Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
@@ -445,7 +424,7 @@ with tab1:
                 st.download_button(
                     label="📄 2. Gerar Arquivo de Importação Direta (.TXT)",
                     data=output_txt.getvalue().encode('utf-8'),
-                    file_name=f"Importacao_Dominio_Direto_{datetime.now().strftime('%Y%m%d')}.txt",
+                    file_name=f"Importacao_Dominio_{datetime.now().strftime('%Y%m%d')}.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
