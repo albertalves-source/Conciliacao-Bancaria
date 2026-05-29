@@ -413,7 +413,7 @@ with tab1:
                 st.download_button(
                     label="📥 1. Baixar Planilha para Ajustes (.XLSX)",
                     data=output_excel.getvalue(),
-                    file_name=f"Analise_Humana_Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
