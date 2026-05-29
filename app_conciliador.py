@@ -1,4 +1,4 @@
-import streamlit st
+import streamlit as st
 import pandas as pd
 import re
 import io
@@ -18,7 +18,7 @@ def formatar_moeda_br(v):
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
-    v_str = str(v).upper().replace('R$', '').replace('$', '').replace(' ', '').replace(' ', '').strip()
+    v_str = str(v).upper().replace('R$', '').replace('$', '').replace(' ', '').replace(' ', '').strip()
     v_str = v_str.replace('C', '').replace('D', '').replace('"', '').replace('«', '').replace('»', '').strip()
     
     if not v_str: return 0.0
@@ -78,7 +78,7 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
             
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS ULTRA COMPATÍVEL ---
+# --- EXTRATOR DE EXTRATOS INTELIGENTE ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -96,29 +96,29 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     transacoes = []
     
-    # TRATAMENTO EXCLUSIVO CORRIGIDO PARA O FORMATO DA DELFINANCE
+    # --- PROCESSO ESPECIAL ADAPTADO PARA O LAYOUT EXATO DA DELFINANCE ---
     if cod_banco_identificado == configuracao_bancos["DELBANK/DELFINANCE"]:
         for idx, row in df.iterrows():
-            valores = [str(x).strip() for x in row.values if pd.notna(x)]
-            if not valores: continue
+            valores_originais = [str(x).strip() for x in row.values if pd.notna(x)]
+            if not valores_originais: continue
             
-            dt = converter_data(valores[0])
+            # Valida se a linha começa com uma data (Ex: 2026-04-01)
+            dt = converter_data(valores_originais[0])
             if not dt: continue
             
             desc_banco = ""
             valor_encontrado = 0.0
             
-            # Junta a linha inteira para fazer uma varredura de texto limpa
-            linha_texto_completa = " ".join(valores).upper()
-            
-            for v in valores[1:]:
+            # Localiza a descrição/historico na linha
+            for v in valores_originais[1:]:
                 v_upper = v.upper()
-                if any(x in v_upper for x in ["PIX", "TED", "TRANSFERENCIA", "PAGAMENTO", "BOLETO"]):
+                if any(x in v_upper for x in ["PIX", "TED", "TRANSFERENCIA", "PAGAMENTO", "BOLETO", "BANCO EMISSOR"]):
                     desc_banco = v
                     break
             
-            for v in valores[1:]:
-                if any(c in v for c in [',', '.']) and any(c.isdigit() for c in v):
+            # Localiza o valor monetário da linha
+            for v in valores_originais[1:]:
+                if any(c in v for c in [',', '.']) and any(c.isdigit() for c in v) and "BANCO" not in v.upper():
                     val_limpo = limpar_valor(v)
                     if val_limpo > 0:
                         valor_encontrado = val_limpo
@@ -126,28 +126,33 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             
             if valor_encontrado == 0: continue
             
-            # CORREÇÃO CIRÚRGICA: Captura o favorecido real e limpa termos do banco (como Nu Pagamentos S.A.)
-            nome_final = desc_banco
-            if "PARA:" in linha_texto_completa:
-                nome_final = linha_texto_completa.split("PARA:")[-1].strip()
-            elif "PAGADOR:" in linha_texto_completa:
-                nome_final = linha_texto_completa.split("PAGADOR:")[-1].strip()
+            # Captura profunda do favorecido combinando todas as células daquela linha
+            linha_completa_txt = " ".join(valores_originais).upper()
+            nome_final = ""
             
-            # Limpa quebras de linhas ou dados adicionais que o banco junta no texto
-            nome_final = nome_final.split("BANCO EMISSOR:")[0].split("VALOR:")[0].strip()
+            if "PARA:" in linha_completa_txt:
+                nome_final = linha_completa_txt.split("PARA:")[-1].strip()
+            elif "PAGADOR:" in linha_completa_txt:
+                nome_final = linha_completa_txt.split("PAGADOR:")[-1].strip()
+            
+            # Remove dados secundários que o banco agrupa
+            nome_final = nome_final.split("BANCO EMISSOR:")[0].split("VALOR:")[0].split("R$")[0].strip()
             
             if not nome_final or nome_final == "" or nome_final == "NAN":
                 nome_final = desc_banco
                 
-            is_credito = "PAGADOR" in linha_texto_completa or "RECEBIDA" in linha_texto_completa
-            if "ENVIADO" in linha_texto_completa or "ENVIADA" in linha_texto_completa or "PAGAMENTO" in linha_texto_completa:
+            if any(x in linha_completa_txt for x in ["TRANSFERENCIA PROPRIETARIA", "PIXBET SOLUCOES"]):
+                nome_final = "PIXBET"
+                
+            is_credito = "PAGADOR" in linha_completa_txt or "RECEBIDA" in linha_completa_txt
+            if any(x in linha_completa_txt for x in ["ENVIADO", "ENVIADA", "PAGAMENTO"]):
                 is_credito = False
                 
             transacoes.append({
                 'Data': dt.strftime('%d/%m/%Y'),
                 'dt_obj': dt,
                 'Valor': valor_encontrado,
-                'Razao_Social': nome_final,
+                'Razao_Social': nome_final.strip(),
                 'Desc_Banco': desc_banco,
                 'Is_Credito': is_credito,
                 'Cod_Banco_Proprio': cod_banco_identificado,
@@ -155,7 +160,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             })
         return transacoes
 
-    # FLUXO PADRÃO COM TRATAMENTO DE LINHA DE TÍTULOS (Para Celcoin e Sicoob)
+    # --- FLUXO PADRÃO (Para Celcoin e Sicoob) ---
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -276,7 +281,6 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita
         
-    # Tabela Contábil de Termos Bancários Corriqueiros
     regras_bancarias_fixas = {
         "DEBCONVTRIBUTOSFEDERAISRFB": "2541", 
         "DEBTITCOMPEEFETIVADO": "2100",       
