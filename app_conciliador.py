@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit st
 import pandas as pd
 import re
 import io
@@ -18,7 +18,7 @@ def formatar_moeda_br(v):
 
 def limpar_valor(v):
     if pd.isna(v): return 0.0
-    v_str = str(v).upper().replace('R$', '').replace('$', '').replace(' ', '').replace(' ', '').strip()
+    v_str = str(v).upper().replace('R$', '').replace('$', '').replace(' ', '').replace(' ', '').strip()
     v_str = v_str.replace('C', '').replace('D', '').replace('"', '').replace('«', '').replace('»', '').strip()
     
     if not v_str: return 0.0
@@ -78,7 +78,7 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
             
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS ULTRA COMPATÍVEL (AGORA INCLUINDO DELBANK COMPLETO) ---
+# --- EXTRATOR DE EXTRATOS ULTRA COMPATÍVEL ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -96,27 +96,27 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     transacoes = []
     
-    # TRATAMENTO EXCLUSIVO PARA O FORMATO DIFERENCIADO DO DELBANK (Sem cabeçalho padrão de colunas textuais)
+    # TRATAMENTO EXCLUSIVO CORRIGIDO PARA O FORMATO DA DELFINANCE
     if cod_banco_identificado == configuracao_bancos["DELBANK/DELFINANCE"]:
         for idx, row in df.iterrows():
             valores = [str(x).strip() for x in row.values if pd.notna(x)]
             if not valores: continue
             
-            # No Delbank a primeira coluna sempre começa com uma data contábil válida
             dt = converter_data(valores[0])
             if not dt: continue
             
-            # Varre a linha para achar a coluna que descreve a transação e os valores
             desc_banco = ""
             valor_encontrado = 0.0
             
+            # Junta a linha inteira para fazer uma varredura de texto limpa
+            linha_texto_completa = " ".join(valores).upper()
+            
             for v in valores[1:]:
                 v_upper = v.upper()
-                if any(x in v_upper for x in ["PIX", "TED", "TRANSFERENCIA", "PAGAMENTO"]):
+                if any(x in v_upper for x in ["PIX", "TED", "TRANSFERENCIA", "PAGAMENTO", "BOLETO"]):
                     desc_banco = v
                     break
             
-            # Captura o valor financeiro da linha (seja positivo ou negativo)
             for v in valores[1:]:
                 if any(c in v for c in [',', '.']) and any(c.isdigit() for c in v):
                     val_limpo = limpar_valor(v)
@@ -126,17 +126,21 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             
             if valor_encontrado == 0: continue
             
-            # Extrai o nome da pessoa de dentro da frase do histórico (Ex: "PARA: JOAO" ou "PAGADOR: PIXBET")
+            # CORREÇÃO CIRÚRGICA: Captura o favorecido real e limpa termos do banco (como Nu Pagamentos S.A.)
             nome_final = desc_banco
-            desc_banco_upper = desc_banco.upper()
-            if "PARA:" in desc_banco_upper:
-                nome_final = desc_banco.split("PARA:")[-1].strip()
-            elif "PAGADOR:" in desc_banco_upper:
-                nome_final = desc_banco.split("PAGADOR:")[-1].strip()
+            if "PARA:" in linha_texto_completa:
+                nome_final = linha_texto_completa.split("PARA:")[-1].strip()
+            elif "PAGADOR:" in linha_texto_completa:
+                nome_final = linha_texto_completa.split("PAGADOR:")[-1].strip()
+            
+            # Limpa quebras de linhas ou dados adicionais que o banco junta no texto
+            nome_final = nome_final.split("BANCO EMISSOR:")[0].split("VALOR:")[0].strip()
+            
+            if not nome_final or nome_final == "" or nome_final == "NAN":
+                nome_final = desc_banco
                 
-            # Determina se foi entrada (Crédito) ou saída (Débito) no Delbank
-            is_credito = "PAGADOR" in desc_banco_upper or "RECEBIDA" in desc_banco_upper
-            if "ENVIADO" in desc_banco_upper or "ENVIADA" in desc_banco_upper or "PAGAMENTO" in desc_banco_upper:
+            is_credito = "PAGADOR" in linha_texto_completa or "RECEBIDA" in linha_texto_completa
+            if "ENVIADO" in linha_texto_completa or "ENVIADA" in linha_texto_completa or "PAGAMENTO" in linha_texto_completa:
                 is_credito = False
                 
             transacoes.append({
@@ -271,6 +275,18 @@ def buscar_codigo_conta(nome_pesquisa, mapa_contas, conta_fallback_receita):
     if not norm_pesquisa: return ""
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita
+        
+    # Tabela Contábil de Termos Bancários Corriqueiros
+    regras_bancarias_fixas = {
+        "DEBCONVTRIBUTOSFEDERAISRFB": "2541", 
+        "DEBTITCOMPEEFETIVADO": "2100",       
+        "DEBTITULOCOBRANCA": "2100",          
+        "DEBITOPACOTESERVICOS": "4122",
+        "PAGAMENTODEBOLETO": "2100"
+    }
+    if norm_pesquisa in regras_bancarias_fixas:
+        return regras_bancarias_fixas[norm_pesquisa]
+        
     if norm_pesquisa in mapa_contas:
         return mapa_contas[norm_pesquisa]
     for nome_cad, cod in mapa_contas.items():
@@ -320,7 +336,6 @@ with tab1:
         for f in f_extratos:
             extrato_lista.extend(ler_extrato_dinamico(f, configuracao_bancos))
             
-        # INTERVENÇÃO HUMANA EM TELA SE O BANCO CONTINUAR DESCONHECIDO
         arquivos_misteriosos = set([tx['Nome_Arquivo_Origem'] for tx in extrato_lista if "PEDIR_AJUDA_DE_" in str(tx['Cod_Banco_Proprio'])])
         
         bancos_resolvidos_na_tela = {}
