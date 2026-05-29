@@ -281,7 +281,7 @@ def carregar_fiscal_entradas(file):
                 entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- MOTOR DE BUSCA RIGOROSO DA VAL (Casamento perfeito ou primeiro + sobrenome completo) ---
+# --- BUSCA CONTÁBIL RIGOROSA CORRIGIDA ---
 def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return "", nome_pesquisa.upper().strip()
@@ -296,8 +296,10 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
         "DEBITOPACOTESERVICOS": ("4122", "DEBITO PACOTE SERVICOS"),
         "PAGAMENTODEBOLETO": ("2100", "PAGAMENTO DE BOLETO")
     }
-    if norm_pesquisa in rules := regras_bancarias_fixas:
-        return rules[norm_pesquisa]
+    
+    # Resolvido o erro de sintaxe da atribuição walrus :=
+    if norm_pesquisa in regras_bancarias_fixas:
+        return regras_bancarias_fixas[norm_pesquisa]
         
     palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
     
@@ -306,8 +308,7 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
         if "".join(palavras_extrato) == "".join(dados['palavras']):
             return cod_reduzido, dados['nome_completo']
             
-    # 2. SEGUNDA TRAVA DE SEGURANÇA SEVERA: Evita misturar "Marias" cruzando o nome do extrato inteiro
-    # Só associa se as palavras iniciais casarem exatamente com o cadastro e se houver mais de 2 termos
+    # 2. SEGUNDA TRAVA SEVERA: Casamento rigoroso de primeiro nome + sobrenomes extensos (Mínimo 2 termos completos)
     if len(palavras_extrato) >= 2:
         for cod_reduzido, dados in mapa_contas.items():
             palavras_cad = dados['palavras']
@@ -315,7 +316,7 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
             if palavras_extrato[:tamanho_corte] == palavras_cad[:tamanho_corte]:
                 return cod_reduzido, dados['nome_completo']
                 
-    # Se não houver certeza absoluta e exatidão, o sistema não chuta! Mantém o nome completo real do extrato
+    # Se não houver certeza absoluta e exatidão, o sistema não chuta! Mantém o nome do extrato original intacto
     return "", nome_pesquisa.upper().strip()
 
 # --- SIDEBAR PARAMETRIZADA ---
@@ -360,7 +361,7 @@ with tab1:
         for tx in extrato_lista:
             cod_banco_atual = tx['Cod_Banco_Proprio']
             
-            # Puxa os dados contábeis validados
+            # Puxa os dados contábeis validados do Plano de Contas
             codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
             if tx['Is_Credito']:
@@ -369,7 +370,7 @@ with tab1:
                 if "TRANSFERENCIA" in tx['Desc_Banco'].upper() or any(x in normalizar_para_match(tx['Razao_Social']) for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
                     hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
-                    hist_final = f"RECB {nome_final_extenso}"
+                    hist_final = f"RECEB {nome_final_extenso}"
             else:
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco_atual
