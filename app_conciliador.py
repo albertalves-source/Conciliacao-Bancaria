@@ -194,7 +194,7 @@ def ler_extrato_dinamico(file):
             
     return transacoes, nome_banco_detectado
 
-# --- CARREGADORES CONTÁBEIS ---
+# --- CARREGADORES E MOTOR DE MATCH ---
 def carregar_cadastro_contas(file):
     file.seek(0)
     conteudo = file.read()
@@ -244,12 +244,12 @@ st.title("🏦 Portal de Conciliação Avançado (Modo Individualizado)")
 tab1, tab2 = st.tabs(["🔄 1. Conciliar Um Banco", "📤 2. Gerar TXT de Planilha Auditada"])
 
 with tab1:
-    colA, colB, colC = st.columns(3)
+    st.markdown("### Processar Arquivo Atual")
+    colA, colB = st.columns(2)
     with colA: f_extrato = st.file_uploader("📂 Anexe O Extrato Bancário", type=["xlsx","csv"])
     with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"])
-    with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal", type=["xlsx","csv"])
 
-    if f_extrato and f_contas and f_entradas:
+    if f_extrato and f_contas:
         mapa_contas = carregar_cadastro_contas(f_contas)
         extrato_lista, nome_banco = ler_extrato_dinamico(f_extrato)
         cod_banco_atual = txt_codigo_banco_universal.strip()
@@ -257,7 +257,6 @@ with tab1:
         matriz_conciliada = []
         for tx in extrato_lista:
             codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
-            
             nota_final = tx['Nota_Fiscal_Anexa']
             
             if tx['Is_Credito']:
@@ -295,3 +294,36 @@ with tab1:
                     val_dominio = formatar_valor_dominio(r['Valor_Original'])
                     output_txt.write(f"{r['Data']};{r['Deb']};{r['Cred']};{val_dominio};;{r['Histórico']};;;;\n")
                 st.download_button(label=f"📄 Gerar TXT Domínio {nome_banco}", data=output_txt.getvalue().encode('utf-8'), file_name=f"conciliacao_{nome_banco}_{data_atual_str}.txt")
+
+with tab2:
+    st.markdown("### Gerar TXT de Planilha Prontamente Editada / Auditada")
+    f_editado = st.file_uploader("📥 Anexe a planilha auditada (.xlsx)", type=["xlsx"], key="edit2")
+    
+    # FIX DE IDENTAÇÃO: O botão de download foi trazido para fora para estar SEMPRE DISPONÍVEL após anexar a planilha
+    if f_editado:
+        df_audit = pd.read_excel(f_editado, dtype=str)
+        cols = {str(c).upper().strip(): c for c in df_audit.columns}
+        c_dt, c_db, c_cr, c_vl, c_hs = cols.get('DATA'), cols.get('DEB'), cols.get('CRED'), cols.get('VALOR'), cols.get('HISTÓRICO')
+        
+        if c_dt and c_vl and c_hs:
+            st.success("Planilha processada com sucesso!")
+            txt_output_audit = io.StringIO()
+            for _, row in df_audit.iterrows():
+                dt_f = str(row[c_dt]).strip().split(' ')[0]
+                val_limpo = formatar_valor_dominio(row[c_vl])
+                deb_f = str(row[c_db]).split('.')[0].strip() if c_db and pd.notna(row[c_db]) else ''
+                cred_f = str(row[c_cr]).split('.')[0].strip() if c_cr and pd.notna(row[c_cr]) else ''
+                hist_f = str(row[c_hs]).upper().strip()
+                if deb_f in ["NAN", "CONTA_MANUAL"]: deb_f = ""
+                if cred_f in ["NAN", "CONTA_MANUAL"]: cred_f = ""
+                txt_output_audit.write(f"{dt_f};{deb_f};{cred_f};{val_limpo};;{hist_f};;;;\n")
+                
+            st.download_button(
+                label="📄 Baixar Arquivo Domínio Formatado (.TXT)",
+                data=txt_output_audit.getvalue().encode('utf-8'),
+                file_name=f"Importacao_Dominio_Editado_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+        else:
+            st.error("Erro: Certifique-se de que a planilha possui as colunas estruturadas como: DATA, DEB, CRED, VALOR e HISTÓRICO.")
