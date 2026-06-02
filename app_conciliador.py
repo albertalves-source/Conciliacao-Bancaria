@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import re
@@ -9,287 +10,394 @@ from datetime import datetime
 st.set_page_config(page_title="Portal de Conciliação Individual", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
-# --- FUNÇÕES DE APOIO E LIMPEZA ---
+# ================= UTIL =================
+
 def formatar_moeda_br(v):
     try:
-        val = float(v)
-        return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except: return "R$ 0,00"
+        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return "R$ 0,00"
 
 def limpar_valor(v):
-    if pd.isna(v): return 0.0
-    v_str = str(v).upper().replace('R$', '').replace('$', '').replace(' ', '').replace(' ', '').strip()
-    v_str = v_str.replace('C', '').replace('D', '').replace('"', '').replace('«', '').replace('»', '').strip()
-    if not v_str: return 0.0
-    if '.' in v_str and ',' in v_str:
-        v_str = v_str.replace('.', '').replace(',', '.')
-    elif ',' in v_str:
-        v_str = v_str.replace(',', '.')
-    try: return abs(float(v_str))
-    except: return 0.0
+    if pd.isna(v):
+        return 0.0
+
+    s = str(v).upper().strip()
+    s = s.replace("R$", "").replace("$", "").replace(" ", "")
+    s = s.replace("C", "").replace("D", "")
+
+    if "." in s and "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+
+    try:
+        return abs(float(s))
+    except:
+        return 0.0
 
 def formatar_valor_dominio(v):
-    try:
-        val = limpar_valor(v)
-        return f"{val:.2f}".replace('.', ',')
-    except: return "0,00"
+    return f"{limpar_valor(v):.2f}".replace(".", ",")
 
 def converter_data(data_obj):
-    if pd.isna(data_obj): return None
-    s = str(data_obj).strip().split(' ')[0].split('T')[0]
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y%m%d'):
-        try: return datetime.strptime(s, fmt).date()
-        except: pass
+    if pd.isna(data_obj):
+        return None
+
+    s = str(data_obj).strip().split(" ")[0]
+
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y%m%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except:
+            pass
+
     try:
-        num = float(s)
-        if num > 10000: return pd.to_datetime(num, unit='D', origin='1899-12-30').date()
-    except: pass
-    return None
+        return pd.to_datetime(float(s), unit="D", origin="1899-12-30").date()
+    except:
+        return None
 
 def higienizar_texto_lista_palavras(texto):
-    if not texto: return []
     txt = str(texto).upper().strip()
-    txt = ''.join(c for c in unicodedata.normalize('NFD', txt) if unicodedata.category(c) != 'Mn')
-    txt = re.sub(r'[^A-Z0-9\s]', '', txt)
+
+    txt = ''.join(
+        c for c in unicodedata.normalize('NFD', txt)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+    txt = re.sub(r'[^A-Z0-9\s]', ' ', txt)
     txt = re.sub(r'\s+', ' ', txt).strip()
-    termos_remover = ["LTDA", "SA", "S/A", "ME", "EIRELI", "SOCIEDADEUNIPESSOAL", "SOLUCOESTECNOLOGICAS", "LTDAME", "DESENVOLVEDORADESISTEMA", "DESENVOLVEDORADESISTEMAS"]
-    palavras = txt.split(' ')
-    return [p for p in palavras if p and p not in termos_remover]
+
+    remover = {
+        "LTDA","SA","S","ME","EIRELI",
+        "SOCIEDADEUNIPESSOAL","SOLUCOESTECNOLOGICAS",
+        "DESENVOLVEDORADESISTEMA","DESENVOLVEDORADESISTEMAS"
+    }
+
+    return [p for p in txt.split() if p and p not in remover]
 
 def normalizar_para_match(texto):
-    palavras = higienizar_texto_lista_palavras(texto)
-    return "".join(palavras)
+    return "".join(higienizar_texto_lista_palavras(texto))
 
-def extrair_nome_banco_por_extenso(df_bruto, nome_arquivo):
-    texto_cabecalho = ""
-    for idx, row in df_bruto.head(15).iterrows():
-        texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
-    name_upper = nome_arquivo.upper()
-    if "SICOOB" in texto_cabecalho or "SICOOB" in name_upper: return "SICOOB"
-    if "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in name_upper: return "DELFINANCE"
-    if "CELCOIN" in texto_cabecalho or "CELCOIN" in name_upper: return "CELCOIN"
-    return "BANCO_INDETERMINADO"
+# ================= LEITURA =================
 
-# --- EXTRATOR DE EXTRATOS BRUTOS COM CORREÇÃO DE HISTÓRICO REAL ---
-def ler_extrato_dinamico(file):
+def ler_dataframe_upload(file):
     file.seek(0)
-    conteudo_bytes = file.read()
-    try: df = pd.read_excel(io.BytesIO(conteudo_bytes), header=None, dtype=str)
+    b = file.read()
+
+    try:
+        return pd.read_excel(io.BytesIO(b), header=None, dtype=str)
     except:
-        try: df = pd.read_csv(io.StringIO(conteudo_bytes.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
-        except: df = pd.read_csv(io.StringIO(conteudo_bytes.decode('iso-8859-1')), header=None, dtype=str, sep=None, engine='python')
-    if df.empty: return [], "BANCO_INDETERMINADO"
-        
-    nome_banco_detectado = extrair_nome_banco_por_extenso(df, file.name)
-    transacoes = []
-    
-    if nome_banco_detectado == "DELFINANCE":
-        for idx, row in df.iterrows():
-            valores_originais = [str(x).strip() for x in row.values if pd.notna(x)]
-            if not valores_originais: continue
-            dt = converter_data(valores_originais[0])
-            if not dt: continue
-            desc_banco = ""
-            for v in valores_originais[1:]:
-                if any(x in v.upper() for x in ["PIX", "TED", "TRANSFERENCIA", "PAGAMENTO", "BOLETO"]):
-                    desc_banco = v
-                    break
-            valor_encontrado = 0.0
-            for v in valores_originais[1:]:
-                if any(c in v for c in [',', '.']) and any(c.isdigit() for c in v) and "BANCO" not in v.upper():
-                    val_limpo = limpar_valor(v)
-                    if val_limpo > 0:
-                        valor_encontrado = val_limpo
-                        break
-            if valor_encontrado == 0: continue
-            linha_completa_txt = " ".join(valores_originais).upper()
-            nome_final = ""
-            if "PARA:" in linha_completa_txt: nome_final = linha_completa_txt.split("PARA:")[-1].strip()
-            elif "PAGADOR:" in linha_completa_txt: nome_final = linha_completa_txt.split("PAGADOR:")[-1].strip()
-            nome_final = nome_final.split("BANCO EMISSOR:")[0].split("VALOR:")[0].split("R$")[0].strip()
-            if not nome_final or nome_final == "NAN": nome_final = desc_banco
-            if any(x in linha_completa_txt for x in ["TRANSFERENCIA PROPRIETARIA", "PIXBET SOLUCOES"]):
-                nome_final = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
-            is_credito = "PAGADOR" in linha_completa_txt or "RECEBIDA" in linha_completa_txt
-            if any(x in linha_completa_txt for x in ["ENVIADO", "ENVIADA", "PAGAMENTO"]): is_credito = False
-            transacoes.append({'Data': dt.strftime('%d/%m/%Y'), 'Valor': valor_encontrado, 'Razao_Social': nome_final.strip(), 'Is_Credito': is_credito, 'Nota_Fiscal_Anexa': ""})
-        return transacoes, nome_banco_detectado
+        try:
+            return pd.read_csv(io.StringIO(b.decode("utf-8")), header=None, dtype=str, sep=None, engine="python")
+        except:
+            return pd.read_csv(io.StringIO(b.decode("latin1")), header=None, dtype=str, sep=None, engine="python")
 
-    # SICOOB E CELCOIN
-    idx_header = None
+def extrair_nome_banco_por_extenso(df, nome_arquivo):
+    texto = " ".join(
+        str(x).upper()
+        for x in df.head(20).fillna("").values.flatten()
+    )
+
+    nome = nome_arquivo.upper()
+
+    if "SICOOB" in texto or "SICOOB" in nome:
+        return "SICOOB"
+
+    if "CELCOIN" in texto or "CELCOIN" in nome:
+        return "CELCOIN"
+
+    if any(x in texto for x in ["DELFINANCE", "DELBANK", "DEL FINANCE"]):
+        return "DELFINANCE"
+
+    return "BANCO_GENERICO"
+
+def localizar_header(df):
     for i, row in df.iterrows():
-        valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-        if any(term in valores for term in ["NOME CONTRAPARTE", "DESCRIÇÃO", "HISTÓRICO", "DESCRICAO", "FAVORECIDO", "VALOR", "DEB/CRED"]):
-            idx_header = i
-            break
-            
-    if idx_header is not None:
-        headers = [str(c).strip().upper() for c in df.iloc[idx_header].values]
-        dados_lista = list(df.iloc[idx_header+1:].values)
-        num_colunas = df.shape[1]
-        
-        pos_data = next((idx for idx, c in enumerate(headers) if "DATA" in str(c) or "DT" in str(c)), 0)
-        pos_hist = next((idx for idx, c in enumerate(headers) if "HIST" in str(c) or "DESC" in str(c) or "FAVOR" in str(c)), 2)
-        pos_valor = next((idx for idx, c in enumerate(headers) if "VALOR" in str(c) or "QUANT" in str(c)), num_colunas - 1)
-        
-        total_linhas = len(dados_lista)
-        idx_cursor = 0
-        
-        while idx_cursor < total_linhas:
-            linha_atual = dados_lista[idx_cursor]
-            dt = converter_data(linha_atual[pos_data])
-            if not dt:
-                idx_cursor += 1
-                continue
-                
-            val_original_banco = linha_atual[pos_valor]
-            v = limpar_valor(val_original_banco)
-            if v == 0:
-                idx_cursor += 1
-                continue
-                
-            historico_principal = str(linha_atual[pos_hist]).strip()
-            texto_linhas_anexas = []
-            idx_sub = idx_cursor + 1
-            while idx_sub < total_linhas:
-                linha_sub = dados_lista[idx_sub]
-                if converter_data(linha_sub[pos_data]) or limpar_valor(linha_sub[pos_valor]) > 0:
-                    break
-                conteudo_linha_sub = " ".join([str(x).strip() for x in App_Row := linha_sub if pd.notna(x)])
-                if conteudo_linha_sub: texto_linhas_anexas.append(conteudo_linha_sub)
-                idx_sub += 1
-                
-            bloco_texto_completo = (historico_principal + " " + " ".join(texto_linhas_anexas)).upper()
-            
-            # CORREÇÃO CHAVE: Isola o favorecido real ignorando comandos operacionais do banco
-            nome_final = historico_principal
-            for texto_linha in texto_linhas_anexas:
-                txt_u = texto_linha.upper().strip()
-                if not any(k in txt_u for k in ["PAGAMENTO PIX", "RECEBIMENTO PIX", "SOLICITACAO PIX", "CODIGO TED:"]) and not re.search(r'^\d', txt_u) and not re.search(r'^\*', txt_u) and "NF" not in txt_u and "REPASSE" not in txt_u:
-                    if len(txt_u) > 2:
-                        nome_final = texto_linha
-                        break
-                        
-            nome_final_upper = nome_final.upper()
-            if "PARA:" in nome_final_upper: nome_final = nome_final.split("PARA:")[-1].strip()
-            elif "PAGADOR:" in nome_final_upper: nome_final = nome_final.split("PAGADOR:")[-1].strip()
-                
-            nota_fiscal_anexa = ""
-            match_nf = re.search(r'NF\s*([0-9]+)', bloco_texto_completo)
-            if match_nf:
-                nota_fiscal_anexa = match_nf.group(1)
-                
-            is_credito = "CREDITO" in bloco_texto_completo or "RECEB" in bloco_texto_completo or str(val_original_banco).endswith("C")
-            if "DEBITO" in bloco_texto_completo or "EMITIDO" in bloco_texto_completo or str(val_original_banco).endswith("D") or "-" in str(val_original_banco):
-                is_credito = False
-                
-            if "SALDO DO DIA" in bloco_texto_completo:
-                idx_cursor = idx_sub
-                continue
-                
-            transacoes.append({
-                'Data': dt.strftime('%d/%m/%Y'), 'Valor': v, 'Razao_Social': nome_final.strip(),
-                'Is_Credito': is_credito, 'Nota_Fiscal_Anexa': nota_fiscal_anexa
-            })
-            idx_cursor = idx_sub
-            
-    return transacoes, nome_banco_detectado
+        vals = [str(x).upper() for x in row.values if pd.notna(x)]
 
-# --- CARREGADORES E MOTOR DE MATCH RIGOROSO ---
+        if any("DATA" in v for v in vals) and any("VALOR" in v for v in vals):
+            return i
+
+        if "HISTÓRICO" in vals or "HISTORICO" in vals:
+            return i
+
+    return None
+
+def extrair_nome_real(historico, anexas):
+    nome = historico
+
+    for linha in anexas:
+        txt = str(linha).upper().strip()
+
+        if not txt:
+            continue
+
+        if any(x in txt for x in [
+            "RECEBIMENTO PIX",
+            "PAGAMENTO PIX",
+            "SOLICITACAO PIX",
+            "CODIGO TED",
+            "AUTENTICACAO"
+        ]):
+            continue
+
+        if re.fullmatch(r'[\d\.\-/ ]+', txt):
+            continue
+
+        if "***" in txt:
+            continue
+
+        nome = txt
+        break
+
+    return nome
+
+def ler_extrato_dinamico(file):
+
+    df = ler_dataframe_upload(file)
+
+    if df.empty:
+        return [], "BANCO_GENERICO"
+
+    banco = extrair_nome_banco_por_extenso(df, file.name)
+
+    idx_header = localizar_header(df)
+
+    if idx_header is None:
+        return [], banco
+
+    headers = [str(x).upper().strip() for x in df.iloc[idx_header].values]
+
+    pos_data = next((i for i,h in enumerate(headers) if "DATA" in h), 0)
+
+    pos_hist = next(
+        (i for i,h in enumerate(headers)
+         if any(k in h for k in ["HIST","DESC","FAVOR","NOME","CONTRAPARTE"])),
+        min(2, len(headers)-1)
+    )
+
+    pos_valor = next(
+        (i for i,h in enumerate(headers) if "VALOR" in h),
+        len(headers)-1
+    )
+
+    dados = list(df.iloc[idx_header+1:].values)
+
+    transacoes = []
+    i = 0
+
+    while i < len(dados):
+
+        linha = dados[i]
+
+        dt = converter_data(linha[pos_data])
+
+        if not dt:
+            i += 1
+            continue
+
+        valor_original = linha[pos_valor]
+        valor = limpar_valor(valor_original)
+
+        if valor <= 0:
+            i += 1
+            continue
+
+        historico = str(linha[pos_hist]).strip()
+
+        anexas = []
+        j = i + 1
+
+        while j < len(dados):
+
+            prox = dados[j]
+
+            if converter_data(prox[pos_data]):
+                break
+
+            conteudo = " ".join(
+                str(x).strip()
+                for x in prox
+                if pd.notna(x)
+            )
+
+            if conteudo:
+                anexas.append(conteudo)
+
+            j += 1
+
+        bloco = (historico + " " + " ".join(anexas)).upper()
+
+        nome_real = extrair_nome_real(historico, anexas)
+
+        credito = (
+            "RECEB" in bloco or
+            "CREDITO" in bloco or
+            str(valor_original).upper().endswith("C")
+        )
+
+        if (
+            "DEBITO" in bloco or
+            "PAGAMENTO" in bloco or
+            str(valor_original).upper().endswith("D") or
+            "-" in str(valor_original)
+        ):
+            credito = False
+
+        nf = ""
+        m = re.search(r'NF\s*([0-9]+)', bloco)
+        if m:
+            nf = m.group(1)
+
+        transacoes.append({
+            "Data": dt.strftime("%d/%m/%Y"),
+            "Valor": valor,
+            "Razao_Social": nome_real,
+            "Is_Credito": credito,
+            "Nota_Fiscal_Anexa": nf
+        })
+
+        i = j
+
+    return transacoes, banco
+
+# ================= CONTAS =================
+
 def carregar_cadastro_contas(file):
-    file.seek(0)
-    conteudo = file.read()
-    try: df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
-    except: df = pd.read_csv(io.StringIO(conteudo.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
+
+    df = ler_dataframe_upload(file)
+
     mapa = {}
+
     for _, r in df.iterrows():
-        valores = [str(x).strip() for x in r.values if pd.notna(x)]
-        if len(valores) >= 2:
-            cod = valores[0].split('.')[0]
-            nome_completo_cadastrado = valores[-1].upper().strip()
-            if cod.isdigit():
-                palavras_chave = higienizar_texto_lista_palavras(nome_completo_cadastrado)
-                if palavras_chave:
-                    mapa[cod] = {'palavras': palavras_chave, 'nome_completo': nome_completo_cadastrado}
+
+        vals = [str(x).strip() for x in r.values if pd.notna(x)]
+
+        if len(vals) < 2:
+            continue
+
+        cod = vals[0].split(".")[0]
+
+        if not cod.isdigit():
+            continue
+
+        nome = vals[-1].upper().strip()
+
+        mapa[cod] = {
+            "nome_completo": nome,
+            "palavras": higienizar_texto_lista_palavras(nome)
+        }
+
     return mapa
 
-def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
-    norm_pesquisa = normalizar_para_match(nome_pesquisa)
-    if not norm_pesquisa: return "", nome_pesquisa.upper().strip()
-    
-    if "ERNILDO" in norm_pesquisa:
-        return "1136", "ERNILDO OPERAÇÃO DE CRYPTO"
-    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
-        return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
-        
-    palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
-    for cod, dados in mapa_contas.items():
-        if "".join(palavras_extrato) == "".join(dados['palavras']): return cod, dados['nome_completo']
-            
-    if len(palavras_extrato) >= 3:
-        for cod, dados in mapa_contas.items():
-            palavras_cad = dados['palavras']
-            tamanho_corte = min(len(palavras_extrato), len(palavras_cad))
-            if tamanho_corte >= 3 and list(palavras_extrato[:tamanho_corte]) == list(palavras_cad[:tamanho_corte]):
-                return cod, dados['nome_completo']
-                
-    return "", nome_pesquisa.upper().strip()
+def buscar_dados_conta_completos(nome_pesquisa, mapa, conta_receita):
 
-# --- SIDEBAR PARAMETRIZADA ---
+    norm = normalizar_para_match(nome_pesquisa)
+
+    if not norm:
+        return "", nome_pesquisa
+
+    if "ERNILDO" in norm:
+        return "1136", "ERNILDO OPERACAO DE CRYPTO"
+
+    if any(x in norm for x in ["PIXBET","FLABET","BETDASORTE","SICKBET"]):
+        return conta_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
+
+    palavras = set(higienizar_texto_lista_palavras(nome_pesquisa))
+
+    melhor_cod = ""
+    melhor_nome = nome_pesquisa
+    melhor_score = 0
+
+    for cod, dados in mapa.items():
+        score = len(palavras.intersection(set(dados["palavras"])))
+
+        if score > melhor_score:
+            melhor_score = score
+            melhor_cod = cod
+            melhor_nome = dados["nome_completo"]
+
+    if melhor_score >= 2:
+        return melhor_cod, melhor_nome
+
+    return "", nome_pesquisa.upper()
+
+# ================= STREAMLIT =================
+
 with st.sidebar:
-    st.header("⚙️ Configurações Contábeis")
-    txt_codigo_banco_universal = st.text_input("Código do Banco Atual (Reduzido):", value="2093")
-    conta_padrao_receita = st.text_input("Código Contábil para Receitas/Transferências:", value="4101")
+    st.header("Configurações")
+    banco_conta = st.text_input("Conta Banco", "2093")
+    conta_receita = st.text_input("Conta Receita", "4101")
 
-st.title("🏦 Portal de Conciliação Avançado (Modo Individualizado)")
-tab1, tab2 = st.tabs(["🔄 1. Conciliar Um Banco", "📤 2. Gerar TXT de Planilha Auditada"])
+st.title("Portal de Conciliação V3")
 
-with tab1:
-    colA, colB, colC = st.columns(3)
-    with colA: f_extrato = st.file_uploader("📂 Anexe O Extrato Bancário", type=["xlsx","csv"])
-    with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"])
-    with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal", type=["xlsx","csv"])
+f_extrato = st.file_uploader("Extrato", type=["xlsx","csv"])
+f_contas = st.file_uploader("Plano de Contas", type=["xlsx","csv"])
+f_entradas = st.file_uploader("Entradas/Fiscal (opcional)", type=["xlsx","csv"])
 
-    if f_extrato and f_contas and f_entradas:
-        mapa_contas = carregar_cadastro_contas(f_contas)
-        extrato_lista, nome_banco = ler_extrato_dinamico(f_extrato)
-        cod_banco_atual = txt_codigo_banco_universal.strip()
-        
-        matriz_conciliada = []
-        for tx in extrato_lista:
-            codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
-            
-            nota_final = tx['Nota_Fiscal_Anexa']
-            
-            if tx['Is_Credito']:
-                c_deb = cod_banco_atual
-                c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
-                hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS" if "PIXBET" in nome_final_extenso else f"RECEB {nome_final_extenso}"
-            else:
-                c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
-                c_crd = cod_banco_atual
-                hist_final = f"PAGTO NF {nota_final} {nome_final_extenso}" if nota_final else f"PAGTO {nome_final_extenso}"
-                    
-            matriz_conciliada.append({
-                'Data': tx['Data'], 'Deb': c_deb, 'Cred': c_crd, 'Valor_Original': tx['Valor'], 
-                'Valor': formatar_moeda_br(tx['Valor']), 'Histórico': " ".join(hist_final.upper().split())
-            })
-            
-        df_final = pd.DataFrame(matriz_conciliada)
-        if not df_final.empty:
-            st.success(f"Conciliação do banco {nome_banco} Concluída com Sucesso!")
-            st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
-            
-            data_atual_str = datetime.now().strftime('%Y%m%d')
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                output_excel = io.BytesIO()
-                with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-                    df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']].to_excel(writer, index=False)
-                st.download_button(label=f"📥 Baixar Planilha Conciliação {nome_banco}", data=output_excel.getvalue(), file_name=f"conciliacao_{nome_banco}_{data_atual_str}.xlsx")
-            with col_btn2:
-                output_txt = io.StringIO()
-                for _, r in df_final.iterrows():
-                    val_dominio = formatar_valor_dominio(r['Valor_Original'])
-                    output_txt.write(f"{r['Data']};{r['Deb']};{r['Cred']};{val_dominio};;{r['Histórico']};;;;\n")
-                st.download_button(label=f"📄 Gerar TXT Domínio {nome_banco}", data=output_txt.getvalue().encode('utf-8'), file_name=f"conciliacao_{nome_banco}_{data_atual_str}.txt")
+if f_extrato and f_contas:
+
+    mapa = carregar_cadastro_contas(f_contas)
+
+    extrato, banco = ler_extrato_dinamico(f_extrato)
+
+    saida = []
+
+    for tx in extrato:
+
+        cod, nome = buscar_dados_conta_completos(
+            tx["Razao_Social"],
+            mapa,
+            conta_receita
+        )
+
+        if tx["Is_Credito"]:
+            deb = banco_conta
+            cred = cod if cod else conta_receita
+            hist = f"RECEB {nome}"
+
+        else:
+            deb = cod if cod else "CONTA_MANUAL"
+            cred = banco_conta
+            hist = f"PAGTO {nome}"
+
+        saida.append({
+            "Data": tx["Data"],
+            "Deb": deb,
+            "Cred": cred,
+            "Valor_Original": tx["Valor"],
+            "Valor": formatar_moeda_br(tx["Valor"]),
+            "Historico": hist
+        })
+
+    df_final = pd.DataFrame(saida)
+
+    st.success(f"{len(df_final)} lançamentos processados - {banco}")
+
+    st.dataframe(df_final, use_container_width=True)
+
+    excel = io.BytesIO()
+
+    with pd.ExcelWriter(excel, engine="openpyxl") as writer:
+        df_final.to_excel(writer, index=False)
+
+    st.download_button(
+        "Baixar Excel",
+        excel.getvalue(),
+        "conciliacao.xlsx"
+    )
+
+    txt = io.StringIO()
+
+    for _, r in df_final.iterrows():
+        txt.write(
+            f"{r['Data']};{r['Deb']};{r['Cred']};"
+            f"{formatar_valor_dominio(r['Valor_Original'])};;"
+            f"{r['Historico']};;;;\n"
+        )
+
+    st.download_button(
+        "Baixar TXT Domínio",
+        txt.getvalue().encode("utf-8"),
+        "conciliacao.txt"
+    )
