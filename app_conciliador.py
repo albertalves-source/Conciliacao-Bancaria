@@ -6,7 +6,7 @@ import warnings
 import unicodedata
 from datetime import datetime
 
-st.set_page_config(page_title="Portal de Conciliação Avançado", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Portal de Conciliação Individual", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
 # --- FUNÇÕES DE APOIO E LIMPEZA ---
@@ -67,7 +67,7 @@ def normalizar_para_match(texto):
     palavras = higienizar_texto_lista_palavras(texto)
     return "".join(palavras)
 
-# --- DETECTOR SIMPLIFICADO DO NOME DO BANCO PARA O ARQUIVO ---
+# --- DETECTOR UNIVERSAL DE BANCOS ---
 def extrair_nome_banco_por_extenso(df_bruto, nome_arquivo):
     texto_cabecalho = ""
     for idx, row in df_bruto.head(15).iterrows():
@@ -83,7 +83,7 @@ def extrair_nome_banco_por_extenso(df_bruto, nome_arquivo):
         return "CELCOIN"
     return "BANCO_INDETERMINADO"
 
-# --- EXTRATOR DE EXTRATOS UNIFICADO E INTELIGENTE ---
+# --- EXTRATOR DE EXTRATOS INTELIGENTE COM LOOK-AHEAD PARA LAYOUT MULTI-LINHAS SICOOB ---
 def ler_extrato_dinamico(file):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -98,7 +98,7 @@ def ler_extrato_dinamico(file):
     nome_banco_detectado = extrair_nome_banco_por_extenso(df, file.name)
     transacoes = []
     
-    # FORMATO DELBANK / DELFINANCE
+    # --- FLUXO 1: DELBANK / DELFINANCE ---
     if nome_banco_detectado == "DELFINANCE":
         for idx, row in df.iterrows():
             valores_originais = [str(x).strip() for x in row.values if pd.notna(x)]
@@ -147,7 +147,7 @@ def ler_extrato_dinamico(file):
             })
         return transacoes, nome_banco_detectado
 
-    # FORMATO CELCOIN E SICOOB
+    # --- FLUXO 2: CELCOIN E SICOOB (COMPATIBILIDADE MULTI-LINHAS) ---
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -157,40 +157,84 @@ def ler_extrato_dinamico(file):
             
     if idx_header is not None:
         headers = [str(c).strip().upper() for c in df.iloc[idx_header].values]
-        dados = df.iloc[idx_header+1:].copy()
-        dados.columns = headers
+        dados_lista = list(df.iloc[idx_header+1:].values)
+        num_colunas = df.shape[1]
         
-        col_data = next((c for c in headers if "DATA" in c or "DT" in c), None)
-        col_tipo = next((c for c in headers if "TIPO" in c or "NATUREZA" in c or "DEB/CRED" in c), None)
-        col_desc_banco = next((c for c in headers if "DESCRI" in c or "HIST" in c), None)
-        col_contraparte = next((c for c in headers if "CONTRAPARTE" in c or "FAVORECIDO" in c or "NOME" in c), None)
-        col_valor = next((c for c in headers if "VALOR" in c or "QUANTIA" in c or "VALOR (R$)" in c), None)
+        # Mapeamento de índices de colunas com base no cabeçalho detectado
+        pos_data = next((idx for idx, c in enumerate(headers) if "DATA" in str(c) or "DT" in str(c)), 0)
+        pos_hist = next((idx for idx, c in enumerate(headers) if "HIST" in str(c) or "DESC" in str(c) or "CONTRA" in str(c) or "FAVOR" in str(c)), 2)
+        pos_valor = next((idx for idx, c in enumerate(headers) if "VALOR" in str(c) or "QUANT" in str(c)), num_colunas - 1)
         
-        for _, r in dados.iterrows():
-            if pd.isna(r.get(col_data)) or pd.isna(r.get(col_valor)): continue
+        total_linhas = len(dados_lista)
+        idx_cursor = 0
+        
+        while idx_cursor < total_linhas:
+            linha_atual = dados_lista[idx_cursor]
             
-            dt = converter_data(r[col_data])
-            v = limpar_valor(r[col_valor])
-            if v == 0 or not dt: continue
+            val_data_celula = linha_atual[pos_data]
+            dt = converter_data(val_data_celula)
             
-            desc_banco = str(r[col_desc_banco]).strip() if col_desc_banco and pd.notna(r[col_desc_banco]) else ""
-            nome_final = str(r[col_contraparte]).strip() if col_contraparte and col_contraparte in r and pd.notna(r[col_contraparte]) else desc_banco
+            # Se a linha não tiver uma data inicial contábil válida, pula para a próxima
+            if not dt:
+                idx_cursor += 1
+                continue
+                
+            val_original_banco = linha_atual[pos_valor]
+            v = limpar_valor(val_original_banco)
+            if v == 0:
+                idx_cursor += 1
+                continue
+                
+            historico_principal = str(linha_atual[pos_hist]).strip()
             
+            # --- MOTOR LOOK-AHEAD: Varre até as 4 linhas abaixo procurando dados anexados do Pix ---
+            texto_linhas_anexas = []
+            idx_sub = idx_cursor + 1
+            while idx_sub < total_linhas:
+                linha_sub = dados_lista[idx_sub]
+                # Se a próxima linha já tiver uma nova data ou um novo valor, ela pertence a outro lançamento! Para a busca.
+                if converter_data(linha_sub[pos_data]) or limpar_valor(linha_sub[pos_valor]) > 0:
+                    break
+                    
+                conteudo_linha_sub = " ".join([str(x).strip() for x in linha_sub if pd.notna(x)])
+                if conteudo_linha_sub:
+                    texto_linhas_anexas.append(conteudo_linha_sub)
+                idx_sub += 1
+                
+            # Junta tudo para extrair o favorecido definitivo do Sicoob
+            bloco_texto_completo = (historico_principal + " " + " ".join(texto_linhas_anexas)).upper()
+            
+            nome_final = historico_principal
+            
+            # Captura cirúrgica de nomes limpos ignorando metadados como CPF/CNPJ de linhas secundárias
+            if "RECEBIMENTO PIX" in bloco_texto_completo or "PAGAMENTO PIX" in bloco_texto_completo:
+                for texto_linha in texto_linhas_anexas:
+                    txt_u = texto_linha.upper()
+                    if not any(k in txt_u for x in txt_u for k in ["PAGAMENTO PIX", "RECEBIMENTO PIX", "SOLICITACAO PIX"]) and not re.search(r'^\d', txt_u) and not re.search(r'^\*', txt_u):
+                        if len(txt_u) > 3:
+                            nome_final = texto_linha
+                            break
+                            
             nome_final_upper = nome_final.upper()
             if "PARA:" in nome_final_upper: nome_final = nome_final.split("PARA:")[-1].strip()
             elif "PAGADOR:" in nome_final_upper: nome_final = nome_final.split("PAGADOR:")[-1].strip()
             elif "TRANSFERENCIA PROPRIETARIA" in nome_final_upper or "SALDO DO DIA" in nome_final_upper:
                 nome_final = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
                 
-            texto_linha_completo = (str(r[col_valor]) + " " + (str(r[col_tipo]) if col_tipo else "")).upper()
-            is_credito = "CREDITO" in texto_linha_completo or "ENTRADA" in texto_linha_completo or " C" in texto_linha_completo or texto_linha_completo.endswith("C")
-            if "DEBITO" in texto_linha_completo or "SAIDA" in texto_linha_completo or " D" in texto_linha_completo or texto_linha_completo.endswith("D") or "-" in str(r[col_valor]):
+            is_credito = "CREDITO" in bloco_texto_completo or "ENTRADA" in bloco_texto_completo or "RECEB" in bloco_texto_completo or str(val_original_banco).endswith("C")
+            if "DEBITO" in bloco_texto_completo or "SAIDA" in bloco_texto_completo or "EMITIDO" in bloco_texto_completo or str(val_original_banco).endswith("D") or "-" in str(val_original_banco):
                 is_credito = False
                 
+            if "SALDO DO DIA" in bloco_texto_completo:
+                idx_cursor = idx_sub
+                continue
+                
             transacoes.append({
-                'Data': dt.strftime('%d/%m/%Y'), 'Valor': v, 'Razao_Social': nome_final,
-                'Desc_Banco': desc_banco, 'Is_Credito': is_credito
+                'Data': dt.strftime('%d/%m/%Y'), 'Valor': v, 'Razao_Social': nome_final.strip(),
+                'Desc_Banco': historico_principal, 'Is_Credito': is_credito
             })
+            idx_cursor = idx_sub
+            
     return transacoes, nome_banco_detectado
 
 # --- CARREGADORES CONTÁBEIS ---
@@ -242,23 +286,19 @@ def carregar_fiscal_entradas(file):
             if fornecedor: entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- BUSCA RIGOROSA CONTÁBIL EXCLUSIVA (SÓ ADMITE DADOS DO ARQUIVO CONTAS) ---
+# --- BUSCA RIGOROSA CONTÁBIL EXCLUSIVA (MATCH 100% EXATO POR EXTEBNSO - CONTRA OUTRAS MARIAS) ---
 def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return "", nome_pesquisa.upper().strip()
-    
-    # Filtro absoluto das bancas parceiras
-    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]): 
-        return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
+    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]): return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
         
     palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
     
     # 1. Trava Absoluta: O nome deve ser 100% idêntico ao plano contábil importado
     for cod, dados in mapa_contas.items():
-        if "".join(palavras_extrato) == "".join(dados['palavras']): 
-            return cod, dados['nome_completo']
+        if "".join(palavras_extrato) == "".join(dados['palavras']): return cod, dados['nome_completo']
             
-    # 2. Match Seguro de Prefixo Longo (Garante segurança e impede mistura de Marias)
+    # 2. Match Seguro de Prefixo de Sobrenome Completo (Exige mínimo de 3 palavras exatas batendo para não misturar as Marias)
     if len(palavras_extrato) >= 3:
         for cod, dados in mapa_contas.items():
             palavras_cad = dados['palavras']
@@ -266,10 +306,9 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
             if tamanho_corte >= 3 and list(palavras_extrato[:tamanho_corte]) == list(palavras_cad[:tamanho_corte]):
                 return cod, dados['nome_completo']
                 
-    # NENHUMA REGRA FIXA INTERNA EMBUTIDA: Se não achou na planilha de contas, devolve vazio contábil seguro
     return "", nome_pesquisa.upper().strip()
 
-# --- SIDEBAR UNIVERSAL ---
+# --- SIDEBAR UNIVERSAL CONTÁBIL ---
 with st.sidebar:
     st.header("⚙️ Código Reduzido do Banco")
     st.info("Informe qual conta reduzida da empresa refere-se ao extrato que você anexou:")
@@ -297,7 +336,6 @@ with tab1:
         
         matriz_conciliada = []
         for tx in extrato_lista:
-            # Roda o motor de busca puro e rigoroso baseado no Plano de Contas fornecido
             codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
             if tx['Is_Credito']:
