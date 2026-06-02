@@ -194,7 +194,7 @@ def ler_extrato_dinamico(file):
             
     return transacoes, nome_banco_detectado
 
-# --- CARREGADORES E MOTOR DE MATCH ---
+# --- CARREGADORES CONTÁBEIS ---
 def carregar_cadastro_contas(file):
     file.seek(0)
     conteudo = file.read()
@@ -211,6 +211,36 @@ def carregar_cadastro_contas(file):
                 if palavras_chave:
                     mapa[cod] = {'palavras': palavras_chave, 'nome_completo': nome_completo_cadastrado}
     return mapa
+
+def carregar_fiscal_entradas(file):
+    file.seek(0)
+    conteudo = file.read()
+    try: df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
+    except: df = pd.read_csv(io.StringIO(conteudo.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
+    entradas = []
+    for _, row in df.iterrows():
+        valores = [str(x).strip() for x in row.values if pd.notna(x)]
+        linha_str = " ".join(valores).upper()
+        if "TOTAL ACUMULADOR" in linha_str or "TOTAL GERAL" in linha_str or "ACOMPANHAMENTO" in linha_str: continue
+        if len(valores) >= 6:
+            dt_nota = None
+            for v in valores:
+                dt_nota = converter_data(v)
+                if dt_nota: break
+            val_nota = 0.0
+            for v in valores:
+                if "," in v and v.replace('.','').replace(',','').replace('-','').isdigit():
+                    val_nota = limpar_valor(v)
+                    break
+            fornecedor = ""
+            for v in valores:
+                v_upper = v.upper()
+                if any(term in v_upper for term in ["LTDA", "SA", "S/A", "COMERCIO", "TECNOLOGIA", "MARKETING", "SISTEMA", "SERVICOS", "ENTRETENIMENTO", "JUNIOR", "MUNICIPAL"]):
+                    fornecedor = re.sub(r'^\d+\.\d+\.\d+[-\s\/]?\d*|^\d{11,14}\s*', '', v_upper).strip()
+                    break
+            nota_num = valores[2] if len(valores) > 2 and valores[2].isdigit() else (re.search(r'\b\d{1,13}\b', linha_str).group(0) if re.search(r'\b\d{1,13}\b', linha_str) else "")
+            if fornecedor: entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
+    return entradas
 
 def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
@@ -245,19 +275,29 @@ tab1, tab2 = st.tabs(["🔄 1. Conciliar Um Banco", "📤 2. Gerar TXT de Planil
 
 with tab1:
     st.markdown("### Processar Arquivo Atual")
-    colA, colB = st.columns(2)
+    colA, colB, colC = st.columns(3)
     with colA: f_extrato = st.file_uploader("📂 Anexe O Extrato Bancário", type=["xlsx","csv"])
     with colB: f_contas = st.file_uploader("🗂️ Arquivo de Contas (Plano de Contas)", type=["xlsx","csv"])
+    with colC: f_entradas = st.file_uploader("📥 Relatório de Entradas / Fiscal (Obrigatório)", type=["xlsx","csv"]) # CAMPO RESTAURADO
 
-    if f_extrato and f_contas:
+    if f_extrato and f_contas and f_entradas:
         mapa_contas = carregar_cadastro_contas(f_contas)
+        cadastro_entradas = carregar_fiscal_entradas(f_entradas)
         extrato_lista, nome_banco = ler_extrato_dinamico(f_extrato)
         cod_banco_atual = txt_codigo_banco_universal.strip()
         
         matriz_conciliada = []
         for tx in extrato_lista:
             codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
+            
+            # Puxa a NF do Sicoob ou cruza com a planilha fiscal se ela veio em branco do extrato
             nota_final = tx['Nota_Fiscal_Anexa']
+            if not nota_final:
+                norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
+                for ent in cadastro_entradas:
+                    if norm_tx_nome and (norm_tx_nome in normalizar_para_match(ent['Fornecedor']) or normalizar_para_match(ent['Fornecedor']) in norm_tx_nome):
+                        nota_final = ent['Nota']
+                        break
             
             if tx['Is_Credito']:
                 c_deb = cod_banco_atual
@@ -299,7 +339,6 @@ with tab2:
     st.markdown("### Gerar TXT de Planilha Prontamente Editada / Auditada")
     f_editado = st.file_uploader("📥 Anexe a planilha auditada (.xlsx)", type=["xlsx"], key="edit2")
     
-    # FIX DE IDENTAÇÃO: O botão de download foi trazido para fora para estar SEMPRE DISPONÍVEL após anexar a planilha
     if f_editado:
         df_audit = pd.read_excel(f_editado, dtype=str)
         cols = {str(c).upper().strip(): c for c in df_audit.columns}
