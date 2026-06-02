@@ -70,7 +70,7 @@ def extrair_nome_banco_por_extenso(df_bruto, nome_arquivo):
     if "CELCOIN" in texto_cabecalho or "CELCOIN" in name_upper: return "CELCOIN"
     return "BANCO_INDETERMINADO"
 
-# --- EXTRATOR DE EXTRATOS ---
+# --- EXTRATOR COM CONCATENAÇÃO PROFUNDA DE SUB-LINHAS (SICOOB / CELCOIN) ---
 def ler_extrato_dinamico(file):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -112,10 +112,10 @@ def ler_extrato_dinamico(file):
                 nome_final = "PIXBET SOLUCOES TECNOLOGICAS LTDA"
             is_credito = "PAGADOR" in linha_completa_txt or "RECEBIDA" in linha_completa_txt
             if any(x in linha_completa_txt for x in ["ENVIADO", "ENVIADA", "PAGAMENTO"]): is_credito = False
-            transacoes.append({'Data': dt.strftime('%d/%m/%Y'), 'Valor': valor_encontrado, 'Razao_Social': nome_final.strip(), 'Is_Credito': is_credito})
+            transacoes.append({'Data': dt.strftime('%d/%m/%Y'), 'Valor': valor_encontrado, 'Razao_Social': nome_final.strip(), 'Is_Credito': is_credito, 'Nota_Fiscal_Anexa': ""})
         return transacoes, nome_banco_detectado
 
-    # PROCESSAMENTO CELCOIN E SICOOB
+    # PROCESSAMENTO CELCOIN E SICOOB COM VARREDURA RECURSIVA DE NOTAS FISCAIS
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -162,10 +162,11 @@ def ler_extrato_dinamico(file):
             bloco_texto_completo = (historico_principal + " " + " ".join(texto_linhas_anexas)).upper()
             nome_final = historico_principal
             
+            # Captura o favorecido ignorando os cabeçalhos internos repetitivos do Sicoob
             if "RECEBIMENTO PIX" in bloco_texto_completo or "PAGAMENTO PIX" in bloco_texto_completo:
                 for texto_linha in texto_linhas_anexas:
                     txt_u = texto_linha.upper().strip()
-                    if not any(k in txt_u for k in ["PAGAMENTO PIX", "RECEBIMENTO PIX", "SOLICITACAO PIX"]) and not re.search(r'^\d', txt_u) and not re.search(r'^\*', txt_u):
+                    if not any(k in txt_u for k in ["PAGAMENTO PIX", "RECEBIMENTO PIX", "SOLICITACAO PIX", "CODIGO TED:"]) and not re.search(r'^\d', txt_u) and not re.search(r'^\*', txt_u) and "NF" not in txt_u and "REPASSE" not in txt_u:
                         if len(txt_u) > 2:
                             nome_final = texto_linha
                             break
@@ -173,6 +174,12 @@ def ler_extrato_dinamico(file):
             nome_final_upper = nome_final.upper()
             if "PARA:" in nome_final_upper: nome_final = nome_final.split("PARA:")[-1].strip()
             elif "PAGADOR:" in nome_final_upper: nome_final = nome_final.split("PAGADOR:")[-1].strip()
+                
+            # CAPTURA CIRÚRGICA DE NF OCULTA NAS SUB-LINHAS DO SICOOB
+            nota_fiscal_anexa = ""
+            match_nf = re.search(r'NF\s*([0-9]+)', bloco_texto_completo)
+            if match_nf:
+                nota_fiscal_anexa = match_nf.group(1)
                 
             is_credito = "CREDITO" in bloco_texto_completo or "RECEB" in bloco_texto_completo or str(val_original_banco).endswith("C")
             if "DEBITO" in bloco_texto_completo or "EMITIDO" in bloco_texto_completo or str(val_original_banco).endswith("D") or "-" in str(val_original_banco):
@@ -182,12 +189,15 @@ def ler_extrato_dinamico(file):
                 idx_cursor = idx_sub
                 continue
                 
-            transacoes.append({'Data': dt.strftime('%d/%m/%Y'), 'Valor': v, 'Razao_Social': nome_final.strip(), 'Is_Credito': is_credito})
+            transacoes.append({
+                'Data': dt.strftime('%d/%m/%Y'), 'Valor': v, 'Razao_Social': nome_final.strip(),
+                'Is_Credito': is_credito, 'Nota_Fiscal_Anexa': nota_fiscal_anexa
+            })
             idx_cursor = idx_sub
             
     return transacoes, nome_banco_detectado
 
-# --- CADASTRO E BUSCA SEM ADIVINHAÇÃO ---
+# --- CARREGADORES E MOTOR DE MATCH ---
 def carregar_cadastro_contas(file):
     file.seek(0)
     conteudo = file.read()
@@ -205,49 +215,15 @@ def carregar_cadastro_contas(file):
                     mapa[cod] = {'palavras': palavras_chave, 'nome_completo': nome_completo_cadastrado}
     return mapa
 
-def carregar_fiscal_entradas(file):
-    file.seek(0)
-    conteudo = file.read()
-    try: df = pd.read_excel(io.BytesIO(conteudo), header=None, dtype=str)
-    except: df = pd.read_csv(io.StringIO(conteudo.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
-    entradas = []
-    for _, row in df.iterrows():
-        valores = [str(x).strip() for x in row.values if pd.notna(x)]
-        linha_str = " ".join(valores).upper()
-        if "TOTAL ACUMULADOR" in linha_str or "TOTAL GERAL" in linha_str or "ACOMPANHAMENTO" in linha_str: continue
-        if len(valores) >= 6:
-            dt_nota = None
-            for v in valores:
-                dt_nota = converter_data(v)
-                if dt_nota: break
-            val_nota = 0.0
-            for v in valores:
-                if "," in v and v.replace('.','').replace(',','').replace('-','').isdigit():
-                    val_nota = limpar_valor(v)
-                    break
-            fornecedor = ""
-            for v in valores:
-                v_upper = v.upper()
-                if any(term in v_upper for term in ["LTDA", "SA", "S/A", "COMERCIO", "TECNOLOGIA", "MARKETING", "SISTEMA", "SERVICOS", "ENTRETENIMENTO", "JUNIOR", "MUNICIPAL"]):
-                    fornecedor = re.sub(r'^\d+\.\d+\.\d+[-\s\/]?\d*|^\d{11,14}\s*', '', v_upper).strip()
-                    break
-            nota_num = valores[2] if len(valores) > 2 and valores[2].isdigit() else (re.search(r'\b\d{1,13}\b', linha_str).group(0) if re.search(r'\b\d{1,13}\b', linha_str) else "")
-            if fornecedor: entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
-    return entradas
-
 def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return "", nome_pesquisa.upper().strip()
-    
-    # Redirecionamento explícito das bancas/receitas para a conta configurada na tela pela Val
-    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]): 
+    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
         
     palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
-    
     for cod, dados in mapa_contas.items():
-        if "".join(palavras_extrato) == "".join(dados['palavras']): 
-            return cod, dados['nome_completo']
+        if "".join(palavras_extrato) == "".join(dados['palavras']): return cod, dados['nome_completo']
             
     if len(palavras_extrato) >= 3:
         for cod, dados in mapa_contas.items():
@@ -258,11 +234,10 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
                 
     return "", nome_pesquisa.upper().strip()
 
-# --- STREAMLIT ---
+# --- SIDEBAR PARAMETRIZADA ---
 with st.sidebar:
     st.header("⚙️ Configurações Contábeis")
-    txt_codigo_banco_universal = st.text_input("Código do Banco Atual (Reduzido):", value="2093")
-    # FLEXÍVEL: Define o código correto de receitas/aportes em tela
+    txt_codigo_banco_universal = st.text_input("Código do Banco Atual (Sicoob/Celcoin):", value="2093")
     conta_padrao_receita = st.text_input("Código Contábil para Receitas/Transferências:", value="4101")
 
 st.title("🏦 Portal de Conciliação Avançado (Modo Individualizado)")
@@ -276,7 +251,6 @@ with tab1:
 
     if f_extrato and f_contas and f_entradas:
         mapa_contas = carregar_cadastro_contas(f_contas)
-        cadastro_entradas = carregar_fiscal_entradas(f_entradas)
         extrato_lista, nome_banco = ler_extrato_dinamico(f_extrato)
         cod_banco_atual = txt_codigo_banco_universal.strip()
         
@@ -284,21 +258,20 @@ with tab1:
         for tx in extrato_lista:
             codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
+            # Força o uso da Nota Fiscal capturada nas sublinhas se ela existir no extrato
+            nota_final = tx['Nota_Fiscal_Anexa']
+            
             if tx['Is_Credito']:
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
-                hist_final = "RECB TRANSFERENCIA INTERNA ENTRE CONTAS" if "PIXBET" in nome_final_extenso else f"RECEB {nome_final_extenso}"
+                if "PIXBET" in nome_final_extenso:
+                    hist_final = f"RECEB NF {nota_final} PIXBET SOLUCOES TECNOLOGICAS LTDA" if nota_final else "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
+                else:
+                    hist_final = f"RECEB NF {nota_final} {nome_final_extenso}" if nota_final else f"RECEB {nome_final_extenso}"
             else:
                 c_deb = codigo_fornecedor if codigo_fornecedor else "CONTA_MANUAL"
                 c_crd = cod_banco_atual
-                
-                nota_vinculada = ""
-                norm_tx_nome = normalizar_para_match(tx['Razao_Social'])
-                for ent in cadastro_entradas:
-                    if norm_tx_nome and (norm_tx_nome in normalizar_para_match(ent['Fornecedor']) or normalizar_para_match(ent['Fornecedor']) in norm_tx_nome):
-                        nota_vinculada = ent['Nota']
-                        break
-                hist_final = f"PAGTO NF {nota_vinculada} {nome_final_extenso}" if nota_vinculada else f"PAGTO {nome_final_extenso}"
+                hist_final = f"PAGTO NF {nota_final} {nome_final_extenso}" if nota_final else f"PAGTO {nome_final_extenso}"
                     
             matriz_conciliada.append({
                 'Data': tx['Data'], 'Deb': c_deb, 'Cred': c_crd, 'Valor_Original': tx['Valor'], 
@@ -307,7 +280,7 @@ with tab1:
             
         df_final = pd.DataFrame(matriz_conciliada)
         if not df_final.empty:
-            st.success(f"Conciliação do banco {nome_banco} Concluída!")
+            st.success(f"Conciliação do banco {nome_banco} Concluída com Sucesso!")
             st.dataframe(df_final[['Data', 'Deb', 'Cred', 'Valor', 'Histórico']], use_container_width=True)
             
             data_atual_str = datetime.now().strftime('%Y%m%d')
