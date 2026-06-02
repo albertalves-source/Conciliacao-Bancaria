@@ -6,7 +6,7 @@ import warnings
 import unicodedata
 from datetime import datetime
 
-st.set_page_config(page_title="Portal de Conciliação Individual", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Portal de Conciliação Avançado", layout="wide", page_icon="🏦")
 warnings.filterwarnings("ignore")
 
 # --- FUNÇÕES DE APOIO E LIMPEZA ---
@@ -98,7 +98,7 @@ def ler_extrato_dinamico(file):
     nome_banco_detectado = extrair_nome_banco_por_extenso(df, file.name)
     transacoes = []
     
-    # TRATAMENTO SE FOR LAYOUT DELBANK
+    # FORMATO DELBANK / DELFINANCE
     if nome_banco_detectado == "DELFINANCE":
         for idx, row in df.iterrows():
             valores_originais = [str(x).strip() for x in row.values if pd.notna(x)]
@@ -147,7 +147,7 @@ def ler_extrato_dinamico(file):
             })
         return transacoes, nome_banco_detectado
 
-    # TRATAMENTO CELCOIN E SICOOB
+    # FORMATO CELCOIN E SICOOB
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -242,26 +242,23 @@ def carregar_fiscal_entradas(file):
             if fornecedor: entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- PROCESSO DE MATCH EXATO CONTRA MISTURA DE MARIAS ---
+# --- BUSCA RIGOROSA CONTÁBIL EXCLUSIVA (SÓ ADMITE DADOS DO ARQUIVO CONTAS) ---
 def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
     if not norm_pesquisa: return "", nome_pesquisa.upper().strip()
-    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]): return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
-        
-    regras_bancarias_fixas = {
-        "DEBCONVTRIBUTOSFEDERAISRFB": ("2541", "DEB CONV TRIBUTOS FEDERAIS RFB"), "DEBTITCOMPEEFETIVADO": ("2100", "DEB TIT COMPE EFETIVADO"),       
-        "DEBTITULOCOBRANCA": ("2100", "DEB TITULO COBRANCA"), "DEBITOPACOTESERVICOS": ("4122", "DEBITO PACOTE SERVICOS"),
-        "PAGAMENTODEBOLETO": ("2100", "PAGAMENTO DE BOLETO")
-    }
-    if norm_pesquisa in regras_bancarias_fixas: return regras_bancarias_fixas[norm_pesquisa]
+    
+    # Filtro absoluto das bancas parceiras
+    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]): 
+        return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
         
     palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
     
-    # 1. Trava Absoluta: 100% igual
+    # 1. Trava Absoluta: O nome deve ser 100% idêntico ao plano contábil importado
     for cod, dados in mapa_contas.items():
-        if "".join(palavras_extrato) == "".join(dados['palavras']): return cod, dados['nome_completo']
+        if "".join(palavras_extrato) == "".join(dados['palavras']): 
+            return cod, dados['nome_completo']
             
-    # 2. Match por Sobrenome Extenso Seguro (Evita misturar Marias)
+    # 2. Match Seguro de Prefixo Longo (Garante segurança e impede mistura de Marias)
     if len(palavras_extrato) >= 3:
         for cod, dados in mapa_contas.items():
             palavras_cad = dados['palavras']
@@ -269,13 +266,13 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
             if tamanho_corte >= 3 and list(palavras_extrato[:tamanho_corte]) == list(palavras_cad[:tamanho_corte]):
                 return cod, dados['nome_completo']
                 
+    # NENHUMA REGRA FIXA INTERNA EMBUTIDA: Se não achou na planilha de contas, devolve vazio contábil seguro
     return "", nome_pesquisa.upper().strip()
 
 # --- SIDEBAR UNIVERSAL ---
 with st.sidebar:
     st.header("⚙️ Código Reduzido do Banco")
     st.info("Informe qual conta reduzida da empresa refere-se ao extrato que você anexou:")
-    # Apenas um único campo de texto universal para o banco atual
     txt_codigo_banco_universal = st.text_input("Código do Banco Atual:", value="2093")
     st.divider()
     conta_padrao_receita = st.text_input("Conta Interna Operacional (Bancas/Pix):", value="1121")
@@ -300,6 +297,7 @@ with tab1:
         
         matriz_conciliada = []
         for tx in extrato_lista:
+            # Roda o motor de busca puro e rigoroso baseado no Plano de Contas fornecido
             codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
             if tx['Is_Credito']:
@@ -343,7 +341,7 @@ with tab1:
                 st.download_button(
                     label=f"📥 Baixar Planilha Conciliação {nome_banco_detectado} (.XLSX)",
                     data=output_excel.getvalue(),
-                    file_name=f"conciliacao_{nome_banco_detectado}_{data_atual_str}.xlsx", # Nome do banco e data dinâmicos
+                    file_name=f"conciliacao_{nome_banco_detectado}_{data_atual_str}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
@@ -355,7 +353,7 @@ with tab1:
                 st.download_button(
                     label=f"📄 Gerar TXT Domínio {nome_banco_detectado} (.TXT)",
                     data=output_txt.getvalue().encode('utf-8'),
-                    file_name=f"conciliacao_{nome_banco_detectado}_{data_atual_str}.txt", # Nome do banco e data dinâmicos
+                    file_name=f"conciliacao_{nome_banco_detectado}_{data_atual_str}.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
