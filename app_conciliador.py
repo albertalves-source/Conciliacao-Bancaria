@@ -73,18 +73,16 @@ def descobrir_codigo_banco_do_extrato(df_bruto, configuracao_bancos, nome_arquiv
     for idx, row in df_bruto.head(30).iterrows():
         texto_cabecalho += " " + " ".join([str(x).upper() for x in row.values if pd.notna(x)])
     
-    nome_arq_upper = nome_arquivo.upper()
-    
-    if "SICOOB" in texto_cabecalho or "SICOOB" in nome_arq_upper:
+    name_upper = nome_arquivo.upper()
+    if "SICOOB" in texto_cabecalho or "SICOOB" in name_upper:
         return configuracao_bancos["SICOOB"]
-    elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in nome_arq_upper or "PIXBET ABRIL DELF" in nome_arq_upper:
+    elif "DELBANK" in texto_cabecalho or "DELFINANCE" in texto_cabecalho or "DEL FINANCE" in texto_cabecalho or "DELF" in name_upper or "PIXBET ABRIL DELF" in name_upper:
         return configuracao_bancos["DELBANK/DELFINANCE"]
-    elif "CELCOIN" in texto_cabecalho or "CELCOIN" in nome_arq_upper:
+    elif "CELCOIN" in texto_cabecalho or "CELCOIN" in name_upper:
         return configuracao_bancos["CELCOIN"]
-            
     return f"PEDIR_AJUDA_DE_{nome_arquivo}"
 
-# --- EXTRATOR DE EXTRATOS BRUTOS ---
+# --- EXTRATOR DE EXTRATOS BRUTOS INDIVIDUALIZADO POR LAYOUT ---
 def ler_extrato_dinamico(file, configuracao_bancos):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -102,7 +100,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
     cod_banco_identificado = descobrir_codigo_banco_do_extrato(df, configuracao_bancos, file.name)
     transacoes = []
     
-    # FORMATO DELBANK/DELFINANCE
+    # --- FLUXO 1: DELBANK / DELFINANCE ---
     if cod_banco_identificado == configuracao_bancos["DELBANK/DELFINANCE"]:
         for idx, row in df.iterrows():
             valores_originais = [str(x).strip() for x in row.values if pd.notna(x)]
@@ -161,7 +159,7 @@ def ler_extrato_dinamico(file, configuracao_bancos):
             })
         return transacoes
 
-    # FORMATO CELCOIN E SICOOB
+    # --- FLUXO 2: CELCOIN E SICOOB ---
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -281,10 +279,11 @@ def carregar_fiscal_entradas(file):
                 entradas.append({'Fornecedor': fornecedor, 'Valor': val_nota, 'Nota': nota_num, 'Data': dt_nota})
     return entradas
 
-# --- BUSCA CONTÁBIL RIGOROSA CORRIGIDA ---
+# --- CORREÇÃO ABSOLUTA EXIGIDA PELA VAL: MATCH 100% EXATO E COMPLETO (PROTEÇÃO CONTRA OUTRAS MARIAS) ---
 def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_receita):
     norm_pesquisa = normalizar_para_match(nome_pesquisa)
-    if not norm_pesquisa: return "", nome_pesquisa.upper().strip()
+    if not norm_pesquisa: 
+        return "", nome_pesquisa.upper().strip()
     
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET"]):
         return conta_fallback_receita, "PIXBET SOLUCOES TECNOLOGICAS LTDA"
@@ -297,26 +296,27 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
         "PAGAMENTODEBOLETO": ("2100", "PAGAMENTO DE BOLETO")
     }
     
-    # Resolvido o erro de sintaxe da atribuição walrus :=
     if norm_pesquisa in regras_bancarias_fixas:
         return regras_bancarias_fixas[norm_pesquisa]
         
     palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
     
-    # 1. Cruzamento Exato Líquido (Garante correspondências perfeitas)
+    # 1. BLOQUEIO SEVERO: Compara se a junção de todas as palavras do extrato é 100% IGUAL ao cadastro
+    # Se no extrato for "MARIA ISABELA PONTES", ele NUNCA vai bater com "MARIA LIDIA DE OLIVEIRA SENA"
     for cod_reduzido, dados in mapa_contas.items():
         if "".join(palavras_extrato) == "".join(dados['palavras']):
             return cod_reduzido, dados['nome_completo']
             
-    # 2. SEGUNDA TRAVA SEVERA: Casamento rigoroso de primeiro nome + sobrenomes extensos (Mínimo 2 termos completos)
-    if len(palavras_extrato) >= 2:
+    # 2. MATCH INTELIGENTE APENAS SE FOR SOBRENOME GRANDE COMPLETO (Mínimo 3 palavras idênticas)
+    if len(palavras_extrato) >= 3:
         for cod_reduzido, dados in mapa_contas.items():
             palavras_cad = dados['palavras']
             tamanho_corte = min(len(palavras_extrato), len(palavras_cad))
-            if palavras_extrato[:tamanho_corte] == palavras_cad[:tamanho_corte]:
-                return cod_reduzido, dados['nome_completo']
+            if tamanho_corte >= 3:
+                if list(palavras_extrato[:tamanho_corte]) == list(palavras_cad[:tamanho_corte]):
+                    return cod_reduzido, dados['nome_completo']
                 
-    # Se não houver certeza absoluta e exatidão, o sistema não chuta! Mantém o nome do extrato original intacto
+    # SE NÃO HOUVER CERTEZA ABSOLUTA, DEVOLVE EM BRANCO (CONTA_MANUAL) MAS MANTÉM O NOME INTEGRAL DO EXTRATO
     return "", nome_pesquisa.upper().strip()
 
 # --- SIDEBAR PARAMETRIZADA ---
@@ -361,7 +361,7 @@ with tab1:
         for tx in extrato_lista:
             cod_banco_atual = tx['Cod_Banco_Proprio']
             
-            # Puxa os dados contábeis validados do Plano de Contas
+            # Executa a busca contábil com proteção rígida de sobrenome completo
             codigo_fornecedor, nome_final_extenso = buscar_dados_conta_completos(tx['Razao_Social'], mapa_contas, conta_padrao_receita)
             
             if tx['Is_Credito']:
@@ -415,7 +415,7 @@ with tab1:
                 st.download_button(
                     label="📥 1. Baixar Planilha para Ajustes (.XLSX)",
                     data=output_excel.getvalue(),
-                    file_name=f"Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"Analise_Humana_Conciliacao_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
