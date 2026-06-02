@@ -267,8 +267,8 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
 # --- SIDEBAR PARAMETRIZADA ---
 with st.sidebar:
     st.header("⚙️ Configurações Contábeis")
-    txt_codigo_banco_universal = st.text_input("Código do Banco Atual (Reduzido):", value="2093")
-    conta_padrao_receita = st.text_input("Código Contábil para Receitas/Transferências:", value="4101")
+    txt_codigo_banco_universal = st.text_input("Código do Banco Atual (Reduzido):", value="")
+    conta_padrao_receita = st.text_input("Código Contábil para Receitas/Transferências:", value="")
 
 st.title("🏦 Portal de Conciliação Avançado (Modo Individualizado)")
 tab1, tab2 = st.tabs(["🔄 1. Conciliar Um Banco", "📤 2. Gerar TXT de Planilha Auditada"])
