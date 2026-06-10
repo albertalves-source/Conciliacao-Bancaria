@@ -70,7 +70,7 @@ def extrair_nome_banco_por_extenso(df_bruto, nome_arquivo):
     if "CELCOIN" in texto_cabecalho or "CELCOIN" in name_upper: return "CELCOIN"
     return "BANCO_INDETERMINADO"
 
-# --- EXTRATOR DE EXTRATOS BRUTOS ---
+# --- EXTRATOR DE EXTRATOS BRUTOS MULTI-BANCO ---
 def ler_extrato_dinamico(file):
     file.seek(0)
     conteudo_bytes = file.read()
@@ -83,48 +83,82 @@ def ler_extrato_dinamico(file):
     nome_banco_detectado = extrair_nome_banco_por_extenso(df, file.name)
     transacoes = []
     
-    # 1. PROCESSAMENTO DELFINANCE (Usando Cabeçalho Explícito)
+    # --- 1. PROCESSAMENTO DELFINANCE (NOVO E VELHO LAYOUT) ---
     if nome_banco_detectado == "DELFINANCE":
-        idx_header = None
-        for i, row in df.iterrows():
-            valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
-            if any(term in valores for term in ["HISTÓRICO", "VALOR", "COMPLEMENTO"]):
-                idx_header = i
-                break
-                
-        if idx_header is not None:
-            headers = [str(c).strip().upper() for c in df.iloc[idx_header].values]
-            dados = df.iloc[idx_header+1:].copy()
+        cols_upper = [str(c).upper().strip() for c in df.columns]
+        # Verifica se o cabeçalho veio direto no nome das colunas do CSV
+        if any("DATA" in c for c in cols_upper) and any("HIST" in c for c in cols_upper):
+            dados = df.copy()
+            headers = cols_upper
             dados.columns = headers
+        else:
+            # Caso contrário, varre as primeiras linhas procurando o cabeçalho
+            idx_header = None
+            for i, row in df.iterrows():
+                valores = [str(x).upper().strip() for x in row.values if pd.notna(x)]
+                if any("DATA" in v for v in valores) and any("HIST" in v for v in valores):
+                    idx_header = i
+                    break
+            if idx_header is not None:
+                headers = [str(c).strip().upper() for c in df.iloc[idx_header].values]
+                dados = df.iloc[idx_header+1:].copy()
+                dados.columns = headers
+            else:
+                return [], nome_banco_detectado
+                
+        c_dt = next((c for c in headers if "DATA" in c), None)
+        c_hist_cols = [c for c in headers if "HIST" in c or "COMPLE" in c or "DESC" in c]
+        c_val = next((c for c in headers if "VALOR" in c), None)
+        c_deb = next((c for c in headers if "DÉBITO" in c or "DEBITO" in c), None)
+        c_cred = next((c for c in headers if "CRÉDITO" in c or "CREDITO" in c), None)
+        
+        for _, r in dados.iterrows():
+            dt = converter_data(r.get(c_dt))
+            if not dt: continue
             
-            c_dt = next((c for c in headers if "DATA" in c), None)
-            c_hist = next((c for c in headers if "HIST" in c), None)
-            c_comp = next((c for c in headers if "COMPLE" in c), None)
-            c_val = next((c for c in headers if "VALOR" in c), None)
+            v = 0.0
+            is_credito = False
             
-            for _, r in dados.iterrows():
-                if pd.isna(r.get(c_dt)) or pd.isna(r.get(c_val)): continue
-                dt = converter_data(r[c_dt])
-                v = limpar_valor(r[c_val])
-                if not dt or v == 0: continue
-                
-                hist_principal = str(r.get(c_hist, "")).upper().strip()
-                comp = str(r.get(c_comp, "")).upper().strip()
-                
-                nome_final = hist_principal
-                if "PARA:" in comp: nome_final = comp.split("PARA:")[-1].split("-")[0].strip()
-                elif "PAGADOR:" in comp: nome_final = comp.split("PAGADOR:")[-1].split("-")[0].strip()
-                elif "RECEBIDA DE" in hist_principal: nome_final = hist_principal.split("RECEBIDA DE")[-1].strip()
-                
-                is_credito = "RECEBIDA" in hist_principal or "ENTRADA" in hist_principal
-                
-                transacoes.append({
-                    'Data': dt.strftime('%d/%m/%Y'), 'Valor': v, 'Razao_Social': nome_final, 
-                    'Is_Credito': is_credito, 'Nota_Fiscal_Anexa': ""
-                })
+            if c_val and pd.notna(r.get(c_val)):
+                v = limpar_valor(r.get(c_val))
+                full_hist = " ".join([str(r.get(c)).upper() for c in c_hist_cols if pd.notna(r.get(c))])
+                if "RECEBIDA" in full_hist or "ENTRADA" in full_hist or "PAGADOR:" in full_hist:
+                    is_credito = True
+                elif "ENVIADA" in full_hist or "PAGAMENTO" in full_hist or "PARA:" in full_hist:
+                    is_credito = False
+            else:
+                if c_cred and pd.notna(r.get(c_cred)):
+                    v_cred = limpar_valor(r.get(c_cred))
+                    if v_cred > 0:
+                        v = v_cred
+                        is_credito = True
+                if v == 0 and c_deb and pd.notna(r.get(c_deb)):
+                    v_deb = limpar_valor(r.get(c_deb))
+                    if v_deb > 0:
+                        v = v_deb
+                        is_credito = False
+                        
+            if v == 0: continue
+            
+            full_hist = " ".join([str(r.get(c)).upper() for c in c_hist_cols if pd.notna(r.get(c))])
+            nome_final = full_hist
+            if "PARA:" in full_hist: nome_final = full_hist.split("PARA:")[-1].split("-")[0].strip()
+            elif "PAGADOR:" in full_hist: nome_final = full_hist.split("PAGADOR:")[-1].split("-")[0].strip()
+            elif "RECEBIDA DE" in full_hist: nome_final = full_hist.split("RECEBIDA DE")[-1].strip()
+            elif "RECEBIDO DE" in full_hist: nome_final = full_hist.split("RECEBIDO DE")[-1].strip()
+            
+            # Limpa prefixos chatos que o banco suja no nome
+            if "PIX ENVIADO" in nome_final: nome_final = nome_final.replace("PIX ENVIADO", "").strip()
+            if "TED ENVIADA" in nome_final: nome_final = nome_final.replace("TED ENVIADA", "").strip()
+            
+            transacoes.append({
+                'Data': dt.strftime('%d/%m/%Y'), 'Valor': v, 'Razao_Social': nome_final.strip(), 
+                'Is_Credito': is_credito, 'Nota_Fiscal_Anexa': ""
+            })
+            
         return transacoes, nome_banco_detectado
 
-    # 2. PROCESSAMENTO CELCOIN E SICOOB MULTI-LINHAS
+    # --- 2. PROCESSAMENTO CELCOIN E SICOOB MULTI-LINHAS ---
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -211,21 +245,13 @@ def carregar_cadastro_contas(file):
     except: df = pd.read_csv(io.StringIO(conteudo.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
     mapa = {}
     
-    # Tratamento para iniciar da linha de cabeçalho
-    idx_header = 0
-    for i, row in df.iterrows():
-        if any(str(x).upper() == "CONTA" for x in row.values if pd.notna(x)):
-            idx_header = i
-            break
-            
-    df_dados = df.iloc[idx_header+1:]
-    
-    for _, r in df_dados.iterrows():
+    # Tratamento para não pular dados caso o arquivo venha sem cabeçalho e com as colunas na direita
+    for _, r in df.iterrows():
         valores = [str(x).strip() for x in r.values if pd.notna(x)]
         if len(valores) >= 2:
             cod = valores[0].split('.')[0]
             nome_completo_cadastrado = valores[-1].upper().strip()
-            if cod.isdigit():
+            if cod.isdigit() and nome_completo_cadastrado:
                 palavras_chave = higienizar_texto_lista_palavras(nome_completo_cadastrado)
                 if palavras_chave:
                     mapa[cod] = {'palavras': palavras_chave, 'nome_completo': nome_completo_cadastrado}
@@ -267,8 +293,10 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
     
     if "ERNILDO" in norm_pesquisa:
         return "1136", "ERNILDO OPERAÇÃO DE CRYPTO"
+        
+    # Adaptação para proteger e associar contas das bancas independentemente do nome do arquivo
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET", "BETVIP"]):
-        return conta_fallback_receita, "OPERAÇÕES GRUPO PIXBET/BETVIP"
+        return conta_fallback_receita, "OPERAÇÕES BANCAS"
         
     palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
     for cod, dados in mapa_contas.items():
@@ -287,7 +315,7 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
 with st.sidebar:
     st.header("⚙️ Configurações Contábeis")
     txt_codigo_banco_universal = st.text_input("Código do Banco Atual (Reduzido):", value="2093")
-    conta_padrao_receita = st.text_input("Código Contábil para Receitas/Transferências:", value="1121")
+    conta_padrao_receita = st.text_input("Código Contábil para Receitas/Transferências:", value="1122")
 
 st.title("🏦 Portal de Conciliação Avançado (Modo Individualizado)")
 tab1, tab2 = st.tabs(["🔄 1. Conciliar Um Banco", "📤 2. Gerar TXT de Planilha Auditada"])
@@ -320,8 +348,8 @@ with tab1:
             if tx['Is_Credito']:
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
-                if any(x in nome_final_extenso for x in ["PIXBET", "BETVIP", "FLABET"]):
-                    hist_final = f"RECEB NF {nota_final} {nome_final_extenso}" if nota_final else "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
+                if "OPERAÇÕES BANCAS" in nome_final_extenso:
+                    hist_final = f"RECEB NF {nota_final} {tx['Razao_Social']}" if nota_final else "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
                     hist_final = f"RECEB NF {nota_final} {nome_final_extenso}" if nota_final else f"RECEB {nome_final_extenso}"
             else:
