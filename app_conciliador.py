@@ -83,7 +83,7 @@ def ler_extrato_dinamico(file):
     nome_banco_detectado = extrair_nome_banco_por_extenso(df, file.name)
     transacoes = []
     
-    # 1. PROCESSAMENTO DELFINANCE (NOVO E VELHO LAYOUT - POSITION BASED)
+    # --- 1. PROCESSAMENTO DELFINANCE (NOVO E VELHO LAYOUT - POSITION BASED) ---
     if nome_banco_detectado == "DELFINANCE":
         cols_upper = [str(c).upper().strip() for c in df.columns]
         if any("DATA" in c for c in cols_upper) and any("HIST" in c for c in cols_upper):
@@ -121,7 +121,7 @@ def ler_extrato_dinamico(file):
                 full_hist = " ".join([str(row_vals[i]).upper().strip() for i in idx_hist if pd.notna(row_vals[i])])
                 if "RECEBIDA" in full_hist or "ENTRADA" in full_hist or "PAGADOR:" in full_hist:
                     is_credito = True
-                elif "ENVIADA" in full_hist Alexander or "PAGAMENTO" in full_hist or "PARA:" in full_hist:
+                elif "ENVIADA" in full_hist or "PAGAMENTO" in full_hist or "PARA:" in full_hist:
                     is_credito = False
             else:
                 if idx_cred is not None and pd.notna(row_vals[idx_cred]):
@@ -233,7 +233,7 @@ def ler_extrato_dinamico(file):
             
     return transacoes, nome_banco_detectado
 
-# --- CARREGADORES E MOTOR DE MATCH INTELIGENTE ---
+# --- CARREGADORES E MOTOR DE MATCH ---
 def carregar_cadastro_contas(file):
     file.seek(0)
     conteudo = file.read()
@@ -288,20 +288,18 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
     
     if "ERNILDO" in norm_pesquisa:
         return "1136", "ERNILDO OPERAÇÃO DE CRYPTO"
+        
     if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET", "BETVIP", "SELECT OPERATIONS"]):
         return conta_fallback_receita, "OPERAÇÕES GRUPO PIXBET/BETVIP"
         
-    # Remove IDs puramente numéricos do extrato antes de testar contra as contas (Resolve o bug do Sicoob/Delfinance)
     palavras_extrato = [p for p in higienizar_texto_lista_palavras(nome_pesquisa) if not p.isdigit()]
     if not palavras_extrato: return "", nome_pesquisa.upper().strip()
     
-    # 1. Match exato sem números incomodando
     for cod, dados in mapa_contas.items():
         palavras_cad = [p for p in dados['palavras'] if not p.isdigit()]
         if palavras_extrato == palavras_cad: 
             return cod, dados['nome_completo']
             
-    # 2. Match de prefixo por tokens inteligente (Tamanho mínimo de 2 palavras garante proteção para as Marias)
     for cod, dados in mapa_contas.items():
         palavras_cad = [p for p in dados['palavras'] if not p.isdigit()]
         tamanho_corte = min(len(palavras_extrato), len(palavras_cad))
