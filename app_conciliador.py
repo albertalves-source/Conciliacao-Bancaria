@@ -83,7 +83,7 @@ def ler_extrato_dinamico(file):
     nome_banco_detectado = extrair_nome_banco_por_extenso(df, file.name)
     transacoes = []
     
-    # --- 1. PROCESSAMENTO DELFINANCE (NOVO E VELHO LAYOUT - FIX DE COLUNAS DUPLICADAS) ---
+    # 1. PROCESSAMENTO DELFINANCE (NOVO E VELHO LAYOUT - POSITION BASED)
     if nome_banco_detectado == "DELFINANCE":
         cols_upper = [str(c).upper().strip() for c in df.columns]
         if any("DATA" in c for c in cols_upper) and any("HIST" in c for c in cols_upper):
@@ -102,7 +102,6 @@ def ler_extrato_dinamico(file):
             else:
                 return [], nome_banco_detectado
                 
-        # Usa índices das colunas em vez do nome para evitar crash de colunas duplicadas
         idx_dt = next((i for i, c in enumerate(headers) if "DATA" in c), None)
         idx_val = next((i for i, c in enumerate(headers) if "VALOR" in c), None)
         idx_deb = next((i for i, c in enumerate(headers) if "DÉBITO" in c or "DEBITO" in c), None)
@@ -122,7 +121,7 @@ def ler_extrato_dinamico(file):
                 full_hist = " ".join([str(row_vals[i]).upper().strip() for i in idx_hist if pd.notna(row_vals[i])])
                 if "RECEBIDA" in full_hist or "ENTRADA" in full_hist or "PAGADOR:" in full_hist:
                     is_credito = True
-                elif "ENVIADA" in full_hist or "PAGAMENTO" in full_hist or "PARA:" in full_hist:
+                elif "ENVIADA" in full_hist Alexander or "PAGAMENTO" in full_hist or "PARA:" in full_hist:
                     is_credito = False
             else:
                 if idx_cred is not None and pd.notna(row_vals[idx_cred]):
@@ -155,7 +154,7 @@ def ler_extrato_dinamico(file):
             
         return transacoes, nome_banco_detectado
 
-    # --- 2. PROCESSAMENTO CELCOIN E SICOOB MULTI-LINHAS ---
+    # 2. PROCESSAMENTO CELCOIN E SICOOB MULTI-LINHAS
     idx_header = None
     for i, row in df.iterrows():
         valores = [str(x).strip().upper() for x in row.values if pd.notna(x)]
@@ -234,7 +233,7 @@ def ler_extrato_dinamico(file):
             
     return transacoes, nome_banco_detectado
 
-# --- CARREGADORES E MOTOR DE MATCH ---
+# --- CARREGADORES E MOTOR DE MATCH INTELIGENTE ---
 def carregar_cadastro_contas(file):
     file.seek(0)
     conteudo = file.read()
@@ -242,15 +241,7 @@ def carregar_cadastro_contas(file):
     except: df = pd.read_csv(io.StringIO(conteudo.decode('utf-8')), header=None, dtype=str, sep=None, engine='python')
     mapa = {}
     
-    idx_header = 0
-    for i, row in df.iterrows():
-        if any(str(x).upper() == "CONTA" for x in row.values if pd.notna(x)):
-            idx_header = i
-            break
-            
-    df_dados = df.iloc[idx_header+1:]
-    
-    for _, r in df_dados.iterrows():
+    for _, r in df.iterrows():
         valores = [str(x).strip() for x in r.values if pd.notna(x)]
         if len(valores) >= 2:
             cod = valores[0].split('.')[0]
@@ -297,19 +288,25 @@ def buscar_dados_conta_completos(nome_pesquisa, mapa_contas, conta_fallback_rece
     
     if "ERNILDO" in norm_pesquisa:
         return "1136", "ERNILDO OPERAÇÃO DE CRYPTO"
-        
-    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET", "BETVIP"]):
+    if any(x in norm_pesquisa for x in ["PIXBET", "FLABET", "BETDASORTE", "SICKBET", "BETVIP", "SELECT OPERATIONS"]):
         return conta_fallback_receita, "OPERAÇÕES GRUPO PIXBET/BETVIP"
         
-    palavras_extrato = higienizar_texto_lista_palavras(nome_pesquisa)
+    # Remove IDs puramente numéricos do extrato antes de testar contra as contas (Resolve o bug do Sicoob/Delfinance)
+    palavras_extrato = [p for p in higienizar_texto_lista_palavras(nome_pesquisa) if not p.isdigit()]
+    if not palavras_extrato: return "", nome_pesquisa.upper().strip()
+    
+    # 1. Match exato sem números incomodando
     for cod, dados in mapa_contas.items():
-        if "".join(palavras_extrato) == "".join(dados['palavras']): return cod, dados['nome_completo']
+        palavras_cad = [p for p in dados['palavras'] if not p.isdigit()]
+        if palavras_extrato == palavras_cad: 
+            return cod, dados['nome_completo']
             
-    if len(palavras_extrato) >= 3:
-        for cod, dados in mapa_contas.items():
-            palavras_cad = dados['palavras']
-            tamanho_corte = min(len(palavras_extrato), len(palavras_cad))
-            if tamanho_corte >= 3 and list(palavras_extrato[:tamanho_corte]) == list(palavras_cad[:tamanho_corte]):
+    # 2. Match de prefixo por tokens inteligente (Tamanho mínimo de 2 palavras garante proteção para as Marias)
+    for cod, dados in mapa_contas.items():
+        palavras_cad = [p for p in dados['palavras'] if not p.isdigit()]
+        tamanho_corte = min(len(palavras_extrato), len(palavras_cad))
+        if tamanho_corte >= 2:
+            if palavras_extrato[:tamanho_corte] == palavras_cad[:tamanho_corte]:
                 return cod, dados['nome_completo']
                 
     return "", nome_pesquisa.upper().strip()
@@ -351,7 +348,7 @@ with tab1:
             if tx['Is_Credito']:
                 c_deb = cod_banco_atual
                 c_crd = codigo_fornecedor if codigo_fornecedor else conta_padrao_receita
-                if any(x in nome_final_extenso for x in ["PIXBET", "BETVIP", "FLABET"]):
+                if "OPERAÇÕES GRUPO" in nome_final_extenso:
                     hist_final = f"RECEB NF {nota_final} {tx['Razao_Social']}" if nota_final else "RECB TRANSFERENCIA INTERNA ENTRE CONTAS"
                 else:
                     hist_final = f"RECEB NF {nota_final} {nome_final_extenso}" if nota_final else f"RECEB {nome_final_extenso}"
